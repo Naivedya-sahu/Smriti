@@ -1,45 +1,50 @@
 """
-write.py — dev-path writer: text → strokes → lamp over TCP (host side).
+write.py — dev-path writer: text → strokes → lamp pen-injection over ssh.
 
-    python host/write.py "hello monke" --style cursive [--host 10.11.99.1] [--clear]
+    python host/write.py "hello monke" --style cursive [--rm2 rm2]
 
-ponytail: plain socket, no reconnect logic — dev tool, rerun on failure.
-Device-side production path is device/smriti_write.py via vellum.
+Pipes lamp commands to the lamp binary's stdin on the device (grammar:
+"pen down x y [pressure]" / "pen move x y" / "pen up"). Same output path
+as device/smriti-write; this one renders host-side (full Pillow pipeline,
+proper cursive shaping) instead of replaying compiled .sf stroke-fonts.
+
+ponytail: subprocess ssh per call, no persistent session — dev tool.
 """
 
 from __future__ import annotations
 
 import argparse
-import socket
+import subprocess
 
-import protocol
 from ink import load_styles, render
 
 
-def send(strokes, pressure: int, host: str, port: int = 33334, clear: bool = False) -> int:
-    b = protocol.Batch()
-    if clear:
-        b.clear()
+def to_lamp(strokes, pressure: int, step: int = 3) -> str:
+    out = []
     for s in strokes:
-        b.stroke([(x, y, pressure) for x, y in s])
-    with socket.create_connection((host, port), timeout=5) as sk:
-        sk.sendall(b.encode())
-    return len(b)
+        pts = s[::step] + ([s[-1]] if (len(s) - 1) % step else [])
+        x, y = pts[0]
+        out.append(f"pen down {x} {y} {pressure}")
+        out.extend(f"pen move {x} {y}" for x, y in pts[1:])
+        out.append("pen up")
+    return "\n".join(out) + "\n"
 
 
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("text")
     ap.add_argument("--style", default="cursive")
-    ap.add_argument("--host", default="10.11.99.1")
+    ap.add_argument("--rm2", default="rm2", help="ssh host alias")
+    ap.add_argument("--lamp", default="/home/root/lamp")
     ap.add_argument("--x", type=int, default=100)
     ap.add_argument("--y", type=int, default=150)
-    ap.add_argument("--clear", action="store_true")
+    ap.add_argument("--step", type=int, default=3)
     a = ap.parse_args()
     style = load_styles()[a.style]
-    strokes = render(a.text, style, a.x, a.y)
-    n = send(strokes, style.get("pressure", 2400), a.host, clear=a.clear)
-    print(f"sent {n} commands, {len(strokes)} strokes")
+    cmds = to_lamp(render(a.text, style, a.x, a.y),
+                   style.get("pressure", 2400), a.step)
+    subprocess.run(["ssh", a.rm2, a.lamp], input=cmds.encode("ascii"), check=True)
+    print(f"sent {cmds.count(chr(10))} commands")
 
 
 if __name__ == "__main__":

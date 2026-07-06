@@ -1,25 +1,28 @@
 maintainer="Naivedya Sahu <naivedya.sahu2@gmail.com>"
 pkgname=smriti
 pkgver=0.1.1
-pkgrel=0
+pkgrel=1
 _commit=COMMIT_PLACEHOLDER
 upstream_author="Naivedya-sahu"
 category="writing"
 pkgdesc="Handwriting-style text writer for reMarkable 2 (draws via lamp/rm2fb)"
 url="https://github.com/Naivedya-sahu/smriti"
-arch="noarch"
+arch="armv7"
 license="MIT"
 options="!check !fhs !strip !tracedeps"
 readmeurl="https://raw.githubusercontent.com/Naivedya-sahu/smriti/$_commit/README.md"
 source="smriti-$_commit.tar.gz::https://github.com/Naivedya-sahu/smriti/archive/$_commit.tar.gz"
 builddir="$srcdir/smriti-$_commit"
 
-# Runtime needs busybox awk + nc and a running lamp (TCP :33334) — lamp is
-# not packaged yet (salvage baseline already on device), so no depends=.
+# Strokes are injected as stylus events (bundled lamp binary, armv7,
+# salvaged from Elxnk lamp build 2026-03) — xochitl draws them as real ink.
+# Runtime needs only busybox awk beyond that.
 
 package() {
 	install -Dm755 "$builddir"/device/smriti-write \
 		"$pkgdir"/home/root/.vellum/bin/smriti-write
+	install -Dm755 "$builddir"/device/bin/lamp \
+		"$pkgdir"/home/root/.vellum/bin/lamp
 	install -Dm644 "$builddir"/device/replay.awk \
 		"$pkgdir"/home/root/.vellum/share/smriti/replay.awk
 	install -d "$pkgdir"/home/root/.vellum/share/smriti/fonts

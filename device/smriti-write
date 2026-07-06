@@ -1,23 +1,24 @@
 #!/bin/sh
-# smriti-write — write text on the RM2 e-ink in a Smriti handwriting style.
-# Zero deps beyond busybox (awk, nc). Talks to lamp's TCP port.
+# smriti-write — write text on the RM2 in a Smriti handwriting style.
+# Zero deps beyond busybox awk + the lamp pen-injection binary.
+# Strokes are injected as stylus events: xochitl draws them = real notebook ink.
 #
 #   smriti-write "hello monke"
 #   smriti-write -s print -x 100 -y 300 "second line"
-#   echo "piped" | smriti-write -c
+#   echo "piped" | smriti-write
 
 SHARE="${SMRITI_SHARE:-/home/root/.vellum/share/smriti}"
-STYLE=cursive X0=100 Y0=150 MAXW=1300 CLEAR=0
-HOST=127.0.0.1 PORT=33334
+LAMP="${SMRITI_LAMP:-/home/root/.vellum/bin/lamp}"
+STYLE=cursive X0=100 Y0=150 MAXW=1300 STEP=3
 
-while getopts "s:x:y:w:ch" o; do
+while getopts "s:x:y:w:p:h" o; do
     case $o in
     s) STYLE=$OPTARG ;;
     x) X0=$OPTARG ;;
     y) Y0=$OPTARG ;;
     w) MAXW=$OPTARG ;;
-    c) CLEAR=1 ;;
-    h) echo "usage: smriti-write [-s style] [-x n] [-y n] [-w maxw] [-c] TEXT"
+    p) STEP=$OPTARG ;;
+    h) echo "usage: smriti-write [-s style] [-x n] [-y n] [-w maxw] [-p step] TEXT"
        echo "styles:"; ls "$SHARE/fonts" | sed 's/\.sf$//;s/^/  /'; exit 0 ;;
     esac
 done
@@ -27,8 +28,7 @@ TEXT="$*"
 [ -z "$TEXT" ] && TEXT=$(cat)
 FONT="$SHARE/fonts/$STYLE.sf"
 [ -f "$FONT" ] || { echo "no style '$STYLE' (see smriti-write -h)" >&2; exit 1; }
+[ -x "$LAMP" ] || { echo "lamp not found at $LAMP (set SMRITI_LAMP)" >&2; exit 1; }
 
-{
-    [ "$CLEAR" = 1 ] && echo clear
-    awk -f "$SHARE/replay.awk" -v text="$TEXT" -v x0="$X0" -v y0="$Y0" -v maxw="$MAXW" "$FONT"
-} | nc "$HOST" "$PORT"
+awk -f "$SHARE/replay.awk" -v text="$TEXT" -v x0="$X0" -v y0="$Y0" \
+    -v maxw="$MAXW" -v step="$STEP" "$FONT" | "$LAMP"

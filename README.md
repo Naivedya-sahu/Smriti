@@ -12,10 +12,11 @@ in Python for RM2 (armv7).
 
 ```
 host/ink.py        engine: text → strokes; compiles device stroke-fonts (.sf)
-host/write.py      dev writer: host → lamp TCP :33334
-host/protocol.py   lamp ASCII command protocol (salvaged from Elxnk)
-device/smriti-write  on-device writer (busybox sh + awk + nc, zero deps)
+host/write.py      dev writer: renders host-side, pipes to lamp over ssh
+device/smriti-write  on-device writer (busybox sh + awk, zero deps)
 device/replay.awk    stroke-font replayer
+device/bin/lamp      pen-event injector (armv7, salvaged Elxnk lamp) —
+                     strokes become real xochitl notebook ink, no rm2fb
 device/fonts/*.sf    compiled stroke-fonts (build artifacts, committed)
 styles.toml        writing styles — edit here, release, vellum upgrade
 VELBUILD           vellum/apk package recipe
@@ -50,7 +51,8 @@ vellum update && vellum install smriti
 
 Then every release lands with `vellum update && vellum upgrade`.
 
-Requires lamp running on the device (TCP :33334). Usage:
+Open a notebook page first — strokes are injected as stylus events and
+xochitl draws them as real, saved ink. Usage:
 
 ```sh
 smriti-write "hello monke"
