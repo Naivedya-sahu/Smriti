@@ -22,7 +22,11 @@ for s in $(PYTHONUTF8=1 uv run python -c \
 done
 PYTHONUTF8=1 uv run python host/ink.py selfcheck
 
-# 2 — commit + push (source of the apk tarball)
+# 2 — bump pkgrel (device only upgrades on version change), commit + push
+if ! git diff --quiet -- . ':!VELBUILD' || ! git diff --cached --quiet; then
+    REL=$(sed -n 's/^pkgrel=//p' VELBUILD)
+    sed -i "s/^pkgrel=$REL/pkgrel=$((REL + 1))/" VELBUILD
+fi
 git add -A
 git diff --cached --quiet || git commit -m "$MSG"
 git push origin main
