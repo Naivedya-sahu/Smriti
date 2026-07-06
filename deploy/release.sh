@@ -47,7 +47,8 @@ MSYS_NO_PATHCONV=1 docker run --rm \
             echo "PACKAGER_PRIVKEY=$(ls /root/.abuild/*.rsa | head -1)" >> /root/.abuild/abuild.conf
         cd /work/build
         abuild -F checksum
-        REPODEST=/tmp/out abuild -F -r
+        # CARCH forced: package is prebuilt-binary + scripts, nothing compiles
+        CARCH=armv7 REPODEST=/tmp/out abuild -F -r
         mkdir -p /work/dist/armv7
         find /tmp/out -name "*.apk" -exec cp {} /work/dist/armv7/ \;
         cd /work/dist/armv7
