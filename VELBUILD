@@ -1,11 +1,11 @@
 maintainer="Naivedya Sahu <naivedya.sahu2@gmail.com>"
 pkgname=smriti
 pkgver=0.1.1
-pkgrel=3
+pkgrel=4
 _commit=COMMIT_PLACEHOLDER
 upstream_author="Naivedya-sahu"
 category="writing"
-pkgdesc="Handwriting-style text writer for reMarkable 2 (draws via lamp/rm2fb)"
+pkgdesc="Handwriting text writer for reMarkable 2 (pen-event injection, real ink)"
 url="https://github.com/Naivedya-sahu/smriti"
 arch="armv7"
 license="MIT"
