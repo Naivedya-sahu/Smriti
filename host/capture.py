@@ -1,0 +1,140 @@
+"""
+capture.py — Smriti pen input capture (v0.1.2).
+
+Streams raw wacom events from the RM2 over ssh (`cat /dev/input/event1`) —
+no device-side server needed. Builds strokes, and after an idle period with
+the pen up, "commits" the page: renders strokes to a PNG.
+
+    python host/capture.py -o page.png              # exit after first commit
+    python host/capture.py --watch                  # page_001.png, page_002.png, ...
+    python host/capture.py --idle 2.8 --min-strokes 1
+
+Works with the real EMR pen and with lamp-injected strokes alike (both write
+to the same evdev node), so the pipeline is testable without a pen.
+"""
+
+from __future__ import annotations
+
+import argparse
+import queue
+import struct
+import subprocess
+import threading
+import time
+from pathlib import Path
+
+from PIL import Image, ImageDraw
+
+# armv7 input_event: u32 sec, u32 usec, u16 type, u16 code, s32 value
+EV_FMT = "<IIHHi"
+EV_SIZE = struct.calcsize(EV_FMT)
+EV_SYN, EV_KEY, EV_ABS = 0, 1, 3
+ABS_X, ABS_Y, ABS_PRESSURE = 0, 1, 24
+BTN_TOUCH = 330
+
+CANVAS_W, CANVAS_H = 1404, 1872
+WACOM_X_MAX, WACOM_Y_MAX = 15725.0, 20966.0
+MIN_PRESSURE = 200  # hover noise floor
+
+
+def to_screen(ax: int, ay: int) -> tuple[int, int]:
+    """Wacom axes → screen px. Axes are swapped + y-flipped (see lamp PEN_X/Y)."""
+    return (int(ay * CANVAS_W / WACOM_X_MAX),
+            CANVAS_H - int(ax * CANVAS_H / WACOM_Y_MAX))
+
+
+class Capture:
+    def __init__(self, host: str = "rm2", device: str = "/dev/input/event1"):
+        self.proc = subprocess.Popen(
+            ["ssh", host, f"cat {device}"],
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        self.q: queue.Queue[tuple] = queue.Queue()
+        threading.Thread(target=self._pump, daemon=True).start()
+
+    def _pump(self):
+        buf = b""
+        while True:
+            # raw read: return whatever is available, don't block for a full block
+            chunk = self.proc.stdout.raw.read(EV_SIZE * 256)
+            if not chunk:
+                self.q.put(None)
+                return
+            buf += chunk
+            while len(buf) >= EV_SIZE:
+                self.q.put(struct.unpack(EV_FMT, buf[:EV_SIZE]))
+                buf = buf[EV_SIZE:]
+
+    def close(self):
+        self.proc.kill()
+
+
+def strokes_to_png(strokes: list[list[tuple[int, int]]], out: Path) -> None:
+    img = Image.new("L", (CANVAS_W, CANVAS_H), 255)
+    d = ImageDraw.Draw(img)
+    for s in strokes:
+        if len(s) > 1:
+            d.line(s, fill=0, width=4)
+        elif s:
+            d.ellipse([s[0][0] - 2, s[0][1] - 2, s[0][0] + 2, s[0][1] + 2], fill=0)
+    img.save(out)
+
+
+def run(host: str, idle: float, out: str, watch: bool, min_strokes: int) -> None:
+    cap = Capture(host)
+    print(f"capturing from {host} (idle commit {idle}s) — write on the tablet…",
+          flush=True)
+    strokes: list[list[tuple[int, int]]] = []
+    cur: list[tuple[int, int]] = []
+    ax = ay = pressure = 0
+    touching = False
+    page_n = 0
+    try:
+        while True:
+            try:
+                ev = cap.q.get(timeout=idle)
+            except queue.Empty:
+                if not touching and len(strokes) >= min_strokes:
+                    page_n += 1
+                    path = Path(out if not watch else
+                                Path(out).stem + f"_{page_n:03d}.png")
+                    strokes_to_png(strokes, path)
+                    print(f"committed {len(strokes)} strokes -> {path}", flush=True)
+                    strokes = []
+                    if not watch:
+                        return
+                continue
+            if ev is None:
+                print("stream ended")
+                return
+            _, _, etype, code, value = ev
+            if etype == EV_ABS:
+                if code == ABS_X:
+                    ax = value
+                elif code == ABS_Y:
+                    ay = value
+                elif code == ABS_PRESSURE:
+                    pressure = value
+            elif etype == EV_KEY and code == BTN_TOUCH:
+                touching = bool(value)
+                if not value and len(cur) > 1:
+                    strokes.append(cur)
+                cur = []
+            elif etype == EV_SYN and touching and pressure >= MIN_PRESSURE:
+                cur.append(to_screen(ax, ay))
+    finally:
+        cap.close()
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--host", default="rm2")
+    ap.add_argument("--idle", type=float, default=2.8)
+    ap.add_argument("-o", "--out", default="page.png")
+    ap.add_argument("--watch", action="store_true")
+    ap.add_argument("--min-strokes", type=int, default=1)
+    a = ap.parse_args()
+    run(a.host, a.idle, a.out, a.watch, a.min_strokes)
+
+
+if __name__ == "__main__":
+    main()

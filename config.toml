@@ -1,0 +1,14 @@
+# Smriti host config.
+
+[ai]
+# any OpenAI-compatible endpoint; LM Studio local default
+base_url = "http://localhost:1234/v1"
+model = "qwen3-vl-4b-instruct"
+temperature = 0.7
+max_tokens = 1024
+# for OpenRouter later: base_url = "https://openrouter.ai/api/v1",
+# model = "...", api_key_env = "OPENROUTER_API_KEY"
+
+[capture]
+host = "rm2"
+idle_seconds = 2.8
