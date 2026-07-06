@@ -39,9 +39,11 @@ MSYS_NO_PATHCONV=1 docker run --rm \
     -v "$(cd "$HOME" && pwd -W 2>/dev/null || echo "$HOME")/.abuild:/root/.abuild" \
     alpine:3.22 sh -ec '
         apk add -q alpine-sdk
-        ls /root/.abuild/*.rsa >/dev/null 2>&1 || abuild-keygen -a -i -n
-        cp /root/.abuild/*.rsa.pub /etc/apk/keys/ 2>/dev/null || true
-        grep -q PACKAGER_PRIVKEY /root/.abuild/abuild.conf 2>/dev/null || \
+        grep -q "^PACKAGER=" /root/.abuild/abuild.conf 2>/dev/null || \
+            echo "PACKAGER=\"Naivedya Sahu <naivedya.sahu2@gmail.com>\"" >> /root/.abuild/abuild.conf
+        ls /root/.abuild/*.rsa >/dev/null 2>&1 || abuild-keygen -a -n
+        cp /root/.abuild/*.rsa.pub /etc/apk/keys/
+        grep -q PACKAGER_PRIVKEY /root/.abuild/abuild.conf || \
             echo "PACKAGER_PRIVKEY=$(ls /root/.abuild/*.rsa | head -1)" >> /root/.abuild/abuild.conf
         cd /work/build
         abuild -F checksum
