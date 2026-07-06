@@ -50,9 +50,12 @@ the latest photo. Stay consistent with what was already said.
 
 Rules:
 - Reply to the CONTENT of the handwriting, like a sharp friend in the margins.
-- Max 35 words. No greetings, no sign-off.
+- Max 35 words of prose. No greetings, no sign-off.
 - Plain ASCII only (a-z, 0-9, . , ! ? ' -). No emoji, no markdown, no unicode
   — your reply is redrawn as handwriting by an ASCII-only stroke font.
+- Maths and circuits ARE allowed and encouraged when they help: wrap LaTeX in
+  $$...$$ (amsmath). Circuits: $$\\begin{circuitikz}...\\end{circuitikz}$$.
+  These are typeset properly on the page. Keep prose outside the $$.
 - If the page is unreadable, say so in Monke voice, short."""
 
 MARKER_X, MARKER_Y = 1352, 1826
@@ -108,23 +111,26 @@ def marker(state: str, host: str) -> None:
 
 
 class TouchGesture:
-    """Detects a ~1s stationary finger hold in the marker corner."""
+    """Corner-hold (~1s, stationary) => 'toggle'.
+    Fast wide horizontal swipe => 'pageturn' (xochitl changed page)."""
 
     def __init__(self):
         self.tx = self.ty = 0
         self.down_at: float | None = None
+        self.down_sx = 0.0
         self.stayed = True
 
-    def _in_corner(self) -> bool:
-        sx = self.tx * CANVAS_W / TOUCH_X_MAX
-        sy = CANVAS_H - self.ty * CANVAS_H / TOUCH_Y_MAX
-        return sx >= CORNER_X and sy >= CORNER_Y
+    def _sx(self) -> float:
+        return self.tx * CANVAS_W / TOUCH_X_MAX
 
-    def feed(self, ev) -> bool:
-        """True when a corner-hold completed (finger lifted)."""
+    def _in_corner(self) -> bool:
+        sy = CANVAS_H - self.ty * CANVAS_H / TOUCH_Y_MAX
+        return self._sx() >= CORNER_X and sy >= CORNER_Y
+
+    def feed(self, ev) -> str | None:
         _, _, etype, code, value = ev
         if etype != EV_ABS:
-            return False
+            return None
         if code == ABS_MT_POSITION_X:
             self.tx = value
         elif code == ABS_MT_POSITION_Y:
@@ -132,14 +138,37 @@ class TouchGesture:
         elif code == ABS_MT_TRACKING_ID:
             if value >= 0:
                 self.down_at, self.stayed = time.time(), True
-                return False
+                self.down_sx = self._sx()
+                return None
             if self.down_at is None:
-                return False
+                return None
             held, self.down_at = time.time() - self.down_at, None
-            return held >= HOLD_S and self.stayed and self._in_corner()
+            if held >= HOLD_S and self.stayed and self._in_corner():
+                return "toggle"
+            if held < 0.6 and abs(self._sx() - self.down_sx) > 400:
+                return "pageturn"
+            return None
         if self.down_at is not None and not self._in_corner():
             self.stayed = False
-        return False
+        return None
+
+
+_FLOOR_FILE = __import__("pathlib").Path.home() / ".config" / "smriti" / "floor"
+
+
+def _load_floor() -> int:
+    try:
+        return int(_FLOOR_FILE.read_text())
+    except (OSError, ValueError):
+        return 0
+
+
+def _save_floor(v: int) -> None:
+    try:
+        _FLOOR_FILE.parent.mkdir(parents=True, exist_ok=True)
+        _FLOOR_FILE.write_text(str(v))
+    except OSError:
+        pass
 
 
 def _pull(q: queue.Queue) -> list:
@@ -176,7 +205,11 @@ def run() -> None:
     tg = TouchGesture()
     history: list[dict] = []
     strokes: list[list[tuple[int, int]]] = []
-    floor = 0            # lowest ink y seen this session (inputs + replies)
+    # ink floor = lowest y known to hold ink (inputs + replies). Persisted so
+    # a daemon restart on the same page won't overwrite; finger page-swipes
+    # reset it. ponytail: blind to ink written while the daemon is off — the
+    # honest fix is a real screen grab (goMarkableStream frame), v0.2.
+    floor = _load_floor()
     paused = False
     last_pen = 0.0
     marker("watch", host)
@@ -194,16 +227,22 @@ def run() -> None:
                 if not paused and (s := sb.feed(ev)) is not None:
                     strokes.append(s)
             for ev in _pull(touch.q):
-                if ev is not None and tg.feed(ev):
+                g = tg.feed(ev) if ev is not None else None
+                if g == "toggle":
                     paused = not paused
                     strokes = []
                     print("paused" if paused else "watching", flush=True)
                     marker("pause" if paused else "watch", host)
                     _drain(pen.q, touch.q)
+                elif g == "pageturn":
+                    floor = 0
+                    _save_floor(0)
+                    print("page turned — floor reset", flush=True)
             if (not paused and strokes and not sb.touching
                     and time.time() - last_pen >= idle):
                 floor = _reply(strokes, style, step, bottom, host, history, floor,
                                fade, fade_hold)
+                _save_floor(floor)
                 del history[:-2 * max_turns]
                 strokes = []
                 marker("watch", host)
@@ -235,29 +274,57 @@ def _reply(strokes, style, step, bottom, host, history, floor,
     history += [user, {"role": "assistant", "content": text}]
     print(f"monke ({time.time() - t0:.1f}s): {text}", flush=True)
 
-    if fade:
-        # riddle mode: your words dissolve, the answer appears in their place,
-        # lingers, then dissolves too — page returns clean
-        erase_box(strokes, host)
-        y = max(80, min(py for s in strokes for _, py in s))
-        reply = render(text, style, x=100, y=y)
-        lamp(to_lamp(reply, style.get("pressure", 2400), step), host)
-        time.sleep(fade_hold)
-        erase_box(reply, host)
-        return floor
+    # ponytail: fade/riddle mode DISABLED pending visual verification on
+    # device — erase sweep width/completeness unconfirmed. Re-enable by
+    # uncommenting; config [monke] fade/fade_hold are already plumbed.
+    # if fade:
+    #     # riddle mode: your words dissolve, the answer appears in their
+    #     # place, lingers, then dissolves too — page returns clean
+    #     erase_box(strokes, host)
+    #     y = max(80, min(py for s in strokes for _, py in s))
+    #     reply = render(text, style, x=100, y=y)
+    #     lamp(to_lamp(reply, style.get("pressure", 2400), step), host)
+    #     time.sleep(fade_hold)
+    #     erase_box(reply, host)
+    #     return floor
 
     # keep mode: place below everything inked this session, not just this
     # commit — else writing above an old reply would overwrite it
     y = max(floor, max(py for s in strokes for _, py in s)) + 50
-    reply = render(text, style, x=100, y=y)
+    reply = _layout(text, style, y)
     if reply and max(py for s in reply for _, py in s) > bottom:
         # won't fit — turn the page (injected finger swipe), restart at top
         lamp("swipe left\n", host)
         time.sleep(1.0)
-        reply = render(text, style, x=100, y=150)
+        reply = _layout(text, style, 150)
         floor = 0
     lamp(to_lamp(reply, style.get("pressure", 2400), step), host)
     return max(floor, max((py for s in reply for _, py in s), default=floor))
+
+
+def _layout(text: str, style, y: int) -> list:
+    """Reply → strokes. Prose via the stroke font; $$...$$ blocks typeset
+    through LaTeX (maths/circuitikz) and stacked between the prose."""
+    import re
+    out = []
+    for i, part in enumerate(re.split(r"\$\$(.+?)\$\$", text, flags=re.S)):
+        part = part.strip()
+        if not part:
+            continue
+        if i % 2:  # tex block
+            try:
+                from tex import tex_to_strokes
+                body = part if "\\begin" in part else f"${part}$"
+                seg = tex_to_strokes(body, x=100, y=y + 20, max_w=1200)
+            except Exception as e:
+                print(f"[tex] render failed ({e}) -> writing raw", flush=True)
+                seg = render(part, style, x=100, y=y)
+        else:
+            seg = render(part, style, x=100, y=y)
+        if seg:
+            out += seg
+            y = max(py for s in seg for _, py in s) + 40
+    return out
 
 
 if __name__ == "__main__":

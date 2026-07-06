@@ -36,16 +36,37 @@ def _getkey(name: str) -> str:
         return ""
 
 
-def load_ai_config() -> dict:
-    with open(REPO / "config.toml", "rb") as f:
-        cfg = tomllib.load(f)["ai"]
+def _resolve(cfg: dict) -> dict:
     key_env = cfg.get("api_key_env")
     cfg["api_key"] = _getkey(key_env) if key_env else cfg.get("api_key", "lm-studio")
     return cfg
 
 
+def load_ai_config() -> dict:
+    """[ai] primary; optional [ai_fallback] tried when the primary errors
+    (e.g. Gemini down/offline → local LM Studio)."""
+    with open(REPO / "config.toml", "rb") as f:
+        full = tomllib.load(f)
+    cfg = _resolve(full["ai"])
+    if "ai_fallback" in full:
+        cfg["_fallback"] = _resolve(full["ai_fallback"])
+    return cfg
+
+
 def chat(messages: list[dict], cfg: dict | None = None) -> str:
     cfg = cfg or load_ai_config()
+    fb = cfg.get("_fallback")
+    if fb:
+        try:
+            return _chat(messages, cfg)
+        except Exception as e:
+            print(f"[oracle] primary failed ({e}) -> fallback {fb['model']}",
+                  flush=True)
+            return _chat(messages, fb)
+    return _chat(messages, cfg)
+
+
+def _chat(messages: list[dict], cfg: dict) -> str:
     req = urllib.request.Request(
         cfg["base_url"].rstrip("/") + "/chat/completions",
         data=json.dumps({

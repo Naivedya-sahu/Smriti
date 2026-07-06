@@ -10,9 +10,10 @@ api_key_env = "GEMINI_API_KEY"
 temperature = 0.7
 max_tokens = 1024
 
-# LM Studio local:
-#   base_url = "http://localhost:1234/v1"
-#   model = "qwen3-vl-4b-instruct"
+# Fallback: tried automatically when the primary errors (offline, quota…).
+[ai_fallback]
+base_url = "http://localhost:1234/v1"
+model = "qwen3-vl-4b-instruct"
 # Hermes on the Pi (future):
 #   base_url = "http://monke.local:8000/v1"
 #   model = "hermes"
@@ -33,8 +34,7 @@ idle_seconds = 2.8
 reply_style = "cursive"     # any style from styles.toml
 waypoint_step = 3           # lower = smoother, slower
 page_bottom = 1780          # reply overflowing this -> page-turn swipe
-fade = false                # riddle mode: your ink fades, reply appears in its
-                            # place, lingers, fades too. ERASES handwriting —
-                            # keep false for journaling you want to keep.
+fade = false                # riddle mode — CURRENTLY DISABLED in code (visual
+                            # verify pending; see monke.py _reply). ERASES ink.
 fade_hold = 8               # seconds the reply stays readable before fading
 history_turns = 6           # conversation memory (page images + replies kept)
