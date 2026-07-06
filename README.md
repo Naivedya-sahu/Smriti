@@ -41,9 +41,9 @@ deploy/release.sh "new style: xyz"     # Docker Desktop must be running
 
 ```sh
 # 1. trust the signing key (from gh-pages root)
-wget -P /etc/apk/keys https://naivedya-sahu.github.io/smriti/<key>.rsa.pub
+wget -P /etc/apk/keys "https://naivedya-sahu.github.io/Smriti/naivedya.sahu2@gmail.com-6a4bae6f.rsa.pub"
 # 2. add the repo
-echo "https://naivedya-sahu.github.io/smriti/armv7" >> /etc/apk/repositories
+echo "https://naivedya-sahu.github.io/Smriti/armv7" >> /etc/apk/repositories
 # 3. install
 vellum update && vellum install smriti
 ```
