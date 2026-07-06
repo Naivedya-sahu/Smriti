@@ -68,7 +68,39 @@ class Capture:
         self.proc.kill()
 
 
-def strokes_to_png(strokes: list[list[tuple[int, int]]], out: Path) -> None:
+class StrokeBuilder:
+    """Feed raw events, get completed strokes back."""
+
+    def __init__(self, min_pressure: int = MIN_PRESSURE):
+        self.min_pressure = min_pressure
+        self.ax = self.ay = self.pressure = 0
+        self.touching = False
+        self.cur: list[tuple[int, int]] = []
+
+    def feed(self, ev) -> list[tuple[int, int]] | None:
+        """Returns a finished stroke on pen-up, else None."""
+        _, _, etype, code, value = ev
+        if etype == EV_ABS:
+            if code == ABS_X:
+                self.ax = value
+            elif code == ABS_Y:
+                self.ay = value
+            elif code == ABS_PRESSURE:
+                self.pressure = value
+        elif etype == EV_KEY and code == BTN_TOUCH:
+            self.touching = bool(value)
+            done, self.cur = self.cur, []
+            if not value and len(done) > 1:
+                return done
+        elif etype == EV_SYN and self.touching and self.pressure >= self.min_pressure:
+            self.cur.append(to_screen(self.ax, self.ay))
+        return None
+
+
+def render_strokes(strokes: list[list[tuple[int, int]]],
+                   crop: bool = False, pad: int = 30) -> Image.Image:
+    """Strokes → PIL image. crop=True trims to ink bbox (+pad) — far fewer
+    vision tokens for a few lines of writing than a full blank page."""
     img = Image.new("L", (CANVAS_W, CANVAS_H), 255)
     d = ImageDraw.Draw(img)
     for s in strokes:
@@ -76,24 +108,31 @@ def strokes_to_png(strokes: list[list[tuple[int, int]]], out: Path) -> None:
             d.line(s, fill=0, width=4)
         elif s:
             d.ellipse([s[0][0] - 2, s[0][1] - 2, s[0][0] + 2, s[0][1] + 2], fill=0)
-    img.save(out)
+    if crop and strokes:
+        xs = [x for s in strokes for x, _ in s]
+        ys = [y for s in strokes for _, y in s]
+        img = img.crop((max(0, min(xs) - pad), max(0, min(ys) - pad),
+                        min(CANVAS_W, max(xs) + pad), min(CANVAS_H, max(ys) + pad)))
+    return img
+
+
+def strokes_to_png(strokes: list[list[tuple[int, int]]], out: Path) -> None:
+    render_strokes(strokes).save(out)
 
 
 def run(host: str, idle: float, out: str, watch: bool, min_strokes: int) -> None:
     cap = Capture(host)
     print(f"capturing from {host} (idle commit {idle}s) — write on the tablet…",
           flush=True)
+    sb = StrokeBuilder()
     strokes: list[list[tuple[int, int]]] = []
-    cur: list[tuple[int, int]] = []
-    ax = ay = pressure = 0
-    touching = False
     page_n = 0
     try:
         while True:
             try:
                 ev = cap.q.get(timeout=idle)
             except queue.Empty:
-                if not touching and len(strokes) >= min_strokes:
+                if not sb.touching and len(strokes) >= min_strokes:
                     page_n += 1
                     path = Path(out if not watch else
                                 Path(out).stem + f"_{page_n:03d}.png")
@@ -106,21 +145,8 @@ def run(host: str, idle: float, out: str, watch: bool, min_strokes: int) -> None
             if ev is None:
                 print("stream ended")
                 return
-            _, _, etype, code, value = ev
-            if etype == EV_ABS:
-                if code == ABS_X:
-                    ax = value
-                elif code == ABS_Y:
-                    ay = value
-                elif code == ABS_PRESSURE:
-                    pressure = value
-            elif etype == EV_KEY and code == BTN_TOUCH:
-                touching = bool(value)
-                if not value and len(cur) > 1:
-                    strokes.append(cur)
-                cur = []
-            elif etype == EV_SYN and touching and pressure >= MIN_PRESSURE:
-                cur.append(to_screen(ax, ay))
+            if (s := sb.feed(ev)) is not None:
+                strokes.append(s)
     finally:
         cap.close()
 

@@ -57,13 +57,16 @@ def ask(prompt: str, system: str | None = None) -> str:
     return chat(msgs)
 
 
-def see(image_path: str | Path, prompt: str) -> str:
-    b64 = base64.b64encode(Path(image_path).read_bytes()).decode()
-    return chat([{"role": "user", "content": [
+def see(image: str | Path | bytes, prompt: str, system: str | None = None) -> str:
+    data = image if isinstance(image, bytes) else Path(image).read_bytes()
+    b64 = base64.b64encode(data).decode()
+    msgs = ([{"role": "system", "content": system}] if system else [])
+    msgs.append({"role": "user", "content": [
         {"type": "text", "text": prompt},
         {"type": "image_url",
          "image_url": {"url": f"data:image/png;base64,{b64}"}},
-    ]}])
+    ]})
+    return chat(msgs)
 
 
 def main() -> None:

@@ -6,9 +6,26 @@ base_url = "http://localhost:1234/v1"
 model = "qwen3-vl-4b-instruct"
 temperature = 0.7
 max_tokens = 1024
-# for OpenRouter later: base_url = "https://openrouter.ai/api/v1",
-# model = "...", api_key_env = "OPENROUTER_API_KEY"
+
+# Faster free alternatives — swap the block above:
+#   Gemini (free tier, ~1-3s vision):
+#     base_url = "https://generativelanguage.googleapis.com/v1beta/openai"
+#     model = "gemini-2.0-flash"          # or newer flash
+#     api_key_env = "GEMINI_API_KEY"      # key: aistudio.google.com, free
+#   Groq (free tier, very fast):
+#     base_url = "https://api.groq.com/openai/v1"
+#     model = "meta-llama/llama-4-scout-17b-16e-instruct"
+#     api_key_env = "GROQ_API_KEY"
+#   OpenRouter free VL models (rate-limited):
+#     base_url = "https://openrouter.ai/api/v1"
+#     model = "qwen/qwen2.5-vl-7b-instruct:free"
+#     api_key_env = "OPENROUTER_API_KEY"
 
 [capture]
 host = "rm2"
 idle_seconds = 2.8
+
+[monke]
+reply_style = "cursive"     # any style from styles.toml
+waypoint_step = 3           # lower = smoother, slower
+page_bottom = 1780          # reply overflowing this -> page-turn swipe
