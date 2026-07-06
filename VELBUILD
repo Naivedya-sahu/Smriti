@@ -1,0 +1,35 @@
+maintainer="Naivedya Sahu <naivedya.sahu2@gmail.com>"
+pkgname=smriti
+pkgver=0.1.1
+pkgrel=0
+_commit=COMMIT_PLACEHOLDER
+upstream_author="Naivedya-sahu"
+category="writing"
+pkgdesc="Handwriting-style text writer for reMarkable 2 (draws via lamp/rm2fb)"
+url="https://github.com/Naivedya-sahu/smriti"
+arch="noarch"
+license="MIT"
+options="!check !fhs !strip !tracedeps"
+readmeurl="https://raw.githubusercontent.com/Naivedya-sahu/smriti/$_commit/README.md"
+source="smriti-$_commit.tar.gz::https://github.com/Naivedya-sahu/smriti/archive/$_commit.tar.gz"
+builddir="$srcdir/smriti-$_commit"
+
+# Runtime needs busybox awk + nc and a running lamp (TCP :33334) — lamp is
+# not packaged yet (salvage baseline already on device), so no depends=.
+
+package() {
+	install -Dm755 "$builddir"/device/smriti-write \
+		"$pkgdir"/home/root/.vellum/bin/smriti-write
+	install -Dm644 "$builddir"/device/replay.awk \
+		"$pkgdir"/home/root/.vellum/share/smriti/replay.awk
+	install -d "$pkgdir"/home/root/.vellum/share/smriti/fonts
+	install -m644 "$builddir"/device/fonts/*.sf \
+		"$pkgdir"/home/root/.vellum/share/smriti/fonts/
+
+	install -Dm644 "$builddir"/LICENSE \
+		"$pkgdir"/home/root/.vellum/licenses/$pkgname/LICENSE
+	echo "$url/archive/$_commit.tar.gz" > \
+		"$pkgdir"/home/root/.vellum/licenses/$pkgname/SOURCES
+}
+
+sha512sums="SHA_PLACEHOLDER"

@@ -1,0 +1,27 @@
+# Smriti writing styles. Change here → rebuild → `vellum upgrade` → new hand on device.
+
+[style.cursive]
+font = "fonts/DancingScript.ttf"
+size = 64
+wght = 500
+slant = 0.0        # degrees; Dancing Script already slants
+pressure = 2400
+decimate = 2
+line_height = 1.5
+
+[style.print]
+font = "fonts/PatrickHand.ttf"
+size = 56
+slant = 0.0
+pressure = 2800
+decimate = 2
+line_height = 1.6
+
+[style.cursive-bold]
+font = "fonts/DancingScript.ttf"
+size = 64
+wght = 700
+slant = 4.0
+pressure = 3400
+decimate = 2
+line_height = 1.5

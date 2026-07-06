@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+preview*.png
+dist/
+build/
+*.pyc
+
+# private planning docs — never publish
+BUILD-SPEC.md
+ROADMAP.md
+SPEC.md

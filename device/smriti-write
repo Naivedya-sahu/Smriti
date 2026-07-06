@@ -1,0 +1,34 @@
+#!/bin/sh
+# smriti-write — write text on the RM2 e-ink in a Smriti handwriting style.
+# Zero deps beyond busybox (awk, nc). Talks to lamp's TCP port.
+#
+#   smriti-write "hello monke"
+#   smriti-write -s print -x 100 -y 300 "second line"
+#   echo "piped" | smriti-write -c
+
+SHARE="${SMRITI_SHARE:-/home/root/.vellum/share/smriti}"
+STYLE=cursive X0=100 Y0=150 MAXW=1300 CLEAR=0
+HOST=127.0.0.1 PORT=33334
+
+while getopts "s:x:y:w:ch" o; do
+    case $o in
+    s) STYLE=$OPTARG ;;
+    x) X0=$OPTARG ;;
+    y) Y0=$OPTARG ;;
+    w) MAXW=$OPTARG ;;
+    c) CLEAR=1 ;;
+    h) echo "usage: smriti-write [-s style] [-x n] [-y n] [-w maxw] [-c] TEXT"
+       echo "styles:"; ls "$SHARE/fonts" | sed 's/\.sf$//;s/^/  /'; exit 0 ;;
+    esac
+done
+shift $((OPTIND - 1))
+
+TEXT="$*"
+[ -z "$TEXT" ] && TEXT=$(cat)
+FONT="$SHARE/fonts/$STYLE.sf"
+[ -f "$FONT" ] || { echo "no style '$STYLE' (see smriti-write -h)" >&2; exit 1; }
+
+{
+    [ "$CLEAR" = 1 ] && echo clear
+    awk -f "$SHARE/replay.awk" -v text="$TEXT" -v x0="$X0" -v y0="$Y0" -v maxw="$MAXW" "$FONT"
+} | nc "$HOST" "$PORT"
