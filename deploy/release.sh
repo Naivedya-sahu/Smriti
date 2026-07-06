@@ -63,11 +63,14 @@ MSYS_NO_PATHCONV=1 docker run --rm \
         cp /root/.abuild/*.rsa.pub /work/dist/
     '
 
-# 5 — publish dist/ to gh-pages (repo URL for the device: the Pages URL + /armv7)
+# 5 — publish dist/ to gh-pages (repo URL for the device = the Pages URL;
+# apk appends /armv7 itself). gh-pages is an orphan branch: apk repo + pubkey
+# + .nojekyll only (Jekyll chokes on the tree and stalls Pages builds).
+git fetch -q origin gh-pages
 git worktree remove --force /tmp/smriti-pages 2>/dev/null || true
-git worktree add /tmp/smriti-pages gh-pages 2>/dev/null || \
-    git worktree add -b gh-pages /tmp/smriti-pages
+git worktree add -f -B gh-pages /tmp/smriti-pages origin/gh-pages
 cp -r dist/* /tmp/smriti-pages/
+touch /tmp/smriti-pages/.nojekyll
 cd /tmp/smriti-pages
 git add -A
 git diff --cached --quiet || git commit -m "apk: $MSG ($COMMIT)"
