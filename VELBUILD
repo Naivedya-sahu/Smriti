@@ -1,7 +1,7 @@
 maintainer="Naivedya Sahu <naivedya.sahu2@gmail.com>"
 pkgname=smriti
 pkgver=0.1.1
-pkgrel=2
+pkgrel=3
 _commit=COMMIT_PLACEHOLDER
 upstream_author="Naivedya-sahu"
 category="writing"

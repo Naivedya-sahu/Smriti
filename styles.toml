@@ -2,7 +2,7 @@
 
 [style.cursive]
 font = "fonts/DancingScript.ttf"
-size = 80
+size = 140
 wght = 500
 slant = 0.0        # degrees; Dancing Script already slants
 pressure = 2400
