@@ -22,7 +22,7 @@ import tomllib
 
 from capture import Capture, StrokeBuilder, render_strokes
 from ink import load_styles, render
-from oracle import see
+from oracle import chat, image_msg
 from write import to_lamp
 
 REPO_CFG = __import__("pathlib").Path(__file__).resolve().parents[1] / "config.toml"
@@ -34,6 +34,9 @@ called Smriti). You are shown a photo of what Navy just handwrote.
 Voice: terse, primal-wise caveman. Short sentences. Warm but blunt. You know
 Navy: electrical engineer, builds things, starts MS research at IIT Delhi
 soon. You help with: journaling, study, projects, habits, ideas.
+
+This is an ongoing conversation: earlier pages and your replies may precede
+the latest photo. Stay consistent with what was already said.
 
 Rules:
 - Reply to the CONTENT of the handwriting, like a sharp friend in the margins.
@@ -72,6 +75,9 @@ def run() -> None:
     step = m.get("waypoint_step", 3)
     bottom = m.get("page_bottom", 1780)
 
+    history: list[dict] = []          # multi-turn: past page images + replies
+    max_turns = m.get("history_turns", 6)
+
     cap = Capture(host)
     sb = StrokeBuilder()
     strokes: list[list[tuple[int, int]]] = []
@@ -86,7 +92,8 @@ def run() -> None:
             except queue.Empty:
                 if sb.touching or not strokes:
                     continue
-                _reply(strokes, style, step, bottom, host)
+                _reply(strokes, style, step, bottom, host, history)
+                del history[:-2 * max_turns]
                 strokes = []
                 marker("watch", host)
                 _drain(cap.q)  # our own injected ink echoes on evdev — discard
@@ -107,14 +114,16 @@ def run() -> None:
         print("monke sleeps.", flush=True)
 
 
-def _reply(strokes, style, step, bottom, host) -> None:
+def _reply(strokes, style, step, bottom, host, history) -> None:
     marker("busy", host)
     buf = io.BytesIO()
     render_strokes(strokes, crop=True).save(buf, format="PNG")
     print(f"page committed ({len(strokes)} strokes) -> asking monke…", flush=True)
     t0 = time.time()
-    text = see(buf.getvalue(), "Navy just wrote this. Reply.", system=MONKE_SYSTEM)
+    user = image_msg(buf.getvalue(), "Navy just wrote this. Reply.")
+    text = chat([{"role": "system", "content": MONKE_SYSTEM}] + history + [user])
     text = text.encode("ascii", "ignore").decode().strip()
+    history += [user, {"role": "assistant", "content": text}]
     print(f"monke ({time.time() - t0:.1f}s): {text}", flush=True)
 
     y = max(py for s in strokes for _, py in s) + 50

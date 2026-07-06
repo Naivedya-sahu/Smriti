@@ -1,16 +1,20 @@
 # Smriti host config.
 
 [ai]
-# any OpenAI-compatible endpoint; LM Studio local default
-base_url = "http://localhost:1234/v1"
-model = "qwen3-vl-4b-instruct"
+base_url = "https://generativelanguage.googleapis.com/v1beta/openai"
+model = "gemini-3.1-flash-lite"
+api_key_env = "GEMINI_API_KEY"
 temperature = 0.7
 max_tokens = 1024
+
+# LM Studio local (previous default):
+#   base_url = "http://localhost:1234/v1"
+#   model = "qwen3-vl-4b-instruct"
 
 # Faster free alternatives — swap the block above:
 #   Gemini (free tier, ~1-3s vision):
 #     base_url = "https://generativelanguage.googleapis.com/v1beta/openai"
-#     model = "gemini-2.0-flash"          # or newer flash
+#     model = "gemini-3.1-flash-lite"          # or newer flash
 #     api_key_env = "GEMINI_API_KEY"      # key: aistudio.google.com, free
 #   Groq (free tier, very fast):
 #     base_url = "https://api.groq.com/openai/v1"
@@ -29,3 +33,4 @@ idle_seconds = 2.8
 reply_style = "cursive"     # any style from styles.toml
 waypoint_step = 3           # lower = smoother, slower
 page_bottom = 1780          # reply overflowing this -> page-turn swipe
+history_turns = 6           # conversation memory (page images + replies kept)

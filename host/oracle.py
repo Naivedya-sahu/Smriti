@@ -23,11 +23,24 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[1]
 
 
+def _getkey(name: str) -> str:
+    """Env var, falling back to the Windows user registry (where `setx`
+    writes) — covers keys set after this process started, e.g. over ssh."""
+    if v := os.environ.get(name):
+        return v
+    try:
+        import winreg
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, "Environment") as k:
+            return winreg.QueryValueEx(k, name)[0]
+    except OSError:
+        return ""
+
+
 def load_ai_config() -> dict:
     with open(REPO / "config.toml", "rb") as f:
         cfg = tomllib.load(f)["ai"]
     key_env = cfg.get("api_key_env")
-    cfg["api_key"] = os.environ.get(key_env, "") if key_env else cfg.get("api_key", "lm-studio")
+    cfg["api_key"] = _getkey(key_env) if key_env else cfg.get("api_key", "lm-studio")
     return cfg
 
 
@@ -57,15 +70,20 @@ def ask(prompt: str, system: str | None = None) -> str:
     return chat(msgs)
 
 
-def see(image: str | Path | bytes, prompt: str, system: str | None = None) -> str:
+def image_msg(image: str | Path | bytes, prompt: str) -> dict:
+    """Build a user message carrying an image + text."""
     data = image if isinstance(image, bytes) else Path(image).read_bytes()
     b64 = base64.b64encode(data).decode()
-    msgs = ([{"role": "system", "content": system}] if system else [])
-    msgs.append({"role": "user", "content": [
+    return {"role": "user", "content": [
         {"type": "text", "text": prompt},
         {"type": "image_url",
          "image_url": {"url": f"data:image/png;base64,{b64}"}},
-    ]})
+    ]}
+
+
+def see(image: str | Path | bytes, prompt: str, system: str | None = None) -> str:
+    msgs = ([{"role": "system", "content": system}] if system else [])
+    msgs.append(image_msg(image, prompt))
     return chat(msgs)
 
 
