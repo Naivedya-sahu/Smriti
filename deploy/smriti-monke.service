@@ -1,0 +1,16 @@
+[Unit]
+Description=Smriti Monke daemon (reMarkable diary loop)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=%i
+WorkingDirectory=/home/%i/smriti
+EnvironmentFile=-/home/%i/.config/smriti/env
+ExecStart=/home/%i/.local/bin/uv run python host/monke.py
+Restart=on-failure
+RestartSec=15
+
+[Install]
+WantedBy=multi-user.target

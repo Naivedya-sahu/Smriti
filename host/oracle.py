@@ -32,7 +32,7 @@ def _getkey(name: str) -> str:
         import winreg
         with winreg.OpenKey(winreg.HKEY_CURRENT_USER, "Environment") as k:
             return winreg.QueryValueEx(k, name)[0]
-    except OSError:
+    except (OSError, ImportError):    # missing value, or not Windows
         return ""
 
 

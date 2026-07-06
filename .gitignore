@@ -15,3 +15,5 @@ page*.png
 *.log
 *.txt.log
 capture_log.txt
+device_screen*.png
+fbtest*.png

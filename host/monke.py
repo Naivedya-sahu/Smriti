@@ -65,10 +65,33 @@ TOUCH_X_MAX, TOUCH_Y_MAX = 767.0, 1023.0
 EV_ABS = 3
 
 
+LAMP_BIN = __import__("os").environ.get("SMRITI_LAMP", "/home/root/.vellum/bin/lamp")
+
+
 def lamp(cmds: str, host: str) -> None:
-    subprocess.run(["ssh", host, "/home/root/.vellum/bin/lamp"],
+    subprocess.run(["ssh", host, LAMP_BIN],
                    input=cmds.encode("ascii"), check=True,
                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+def erase_box(strokes: list, host: str, pad: int = 12, sweep: int = 14) -> None:
+    """Wipe the bounding box of the given strokes with a serpentine eraser
+    pass. sweep ≈ eraser contact width; lower it if stripes survive."""
+    xs = [x for s in strokes for x, _ in s]
+    ys = [y for s in strokes for _, y in s]
+    if not xs:
+        return
+    x0, x1 = max(0, min(xs) - pad), min(1403, max(xs) + pad)
+    y0, y1 = max(0, min(ys) - pad), min(1871, max(ys) + pad)
+    cmds, y, left = [f"erase down {x0} {y0}"], y0, True
+    while y <= y1:
+        cmds.append(f"erase move {x1 if left else x0} {y}")
+        y += sweep
+        if y <= y1:
+            cmds.append(f"erase move {x1 if left else x0} {y}")
+        left = not left
+    cmds.append("erase up")
+    lamp("\n".join(cmds) + "\n", host)
 
 
 def marker(state: str, host: str) -> None:
@@ -144,6 +167,8 @@ def run() -> None:
     step = m.get("waypoint_step", 3)
     bottom = m.get("page_bottom", 1780)
     max_turns = m.get("history_turns", 6)
+    fade = m.get("fade", False)
+    fade_hold = m.get("fade_hold", 10)
 
     pen = Capture(host)
     touch = Capture(host, "/dev/input/event2")
@@ -177,7 +202,8 @@ def run() -> None:
                     _drain(pen.q, touch.q)
             if (not paused and strokes and not sb.touching
                     and time.time() - last_pen >= idle):
-                floor = _reply(strokes, style, step, bottom, host, history, floor)
+                floor = _reply(strokes, style, step, bottom, host, history, floor,
+                               fade, fade_hold)
                 del history[:-2 * max_turns]
                 strokes = []
                 marker("watch", host)
@@ -195,7 +221,8 @@ def run() -> None:
         print("monke sleeps.", flush=True)
 
 
-def _reply(strokes, style, step, bottom, host, history, floor) -> int:
+def _reply(strokes, style, step, bottom, host, history, floor,
+           fade=False, fade_hold=10) -> int:
     """Returns the new ink floor (max y written this session)."""
     marker("busy", host)
     buf = io.BytesIO()
@@ -208,8 +235,19 @@ def _reply(strokes, style, step, bottom, host, history, floor) -> int:
     history += [user, {"role": "assistant", "content": text}]
     print(f"monke ({time.time() - t0:.1f}s): {text}", flush=True)
 
-    # place below everything inked this session, not just this commit —
-    # else writing above an old reply would overwrite it
+    if fade:
+        # riddle mode: your words dissolve, the answer appears in their place,
+        # lingers, then dissolves too — page returns clean
+        erase_box(strokes, host)
+        y = max(80, min(py for s in strokes for _, py in s))
+        reply = render(text, style, x=100, y=y)
+        lamp(to_lamp(reply, style.get("pressure", 2400), step), host)
+        time.sleep(fade_hold)
+        erase_box(reply, host)
+        return floor
+
+    # keep mode: place below everything inked this session, not just this
+    # commit — else writing above an old reply would overwrite it
     y = max(floor, max(py for s in strokes for _, py in s)) + 50
     reply = render(text, style, x=100, y=y)
     if reply and max(py for s in reply for _, py in s) > bottom:

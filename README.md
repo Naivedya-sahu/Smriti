@@ -1,116 +1,150 @@
 # Smriti
 
-reMarkable 2 handwriting notebook assistant. **v0.1.1** — text-to-handwriting
-engine + git-based update pipeline. No AI, no pen input yet (v0.1.2+).
+Tom Riddle's diary on a reMarkable 2. Write by hand → **Monke** (an AI persona)
+reads the page → inks a reply back in handwriting — real, saved notebook ink.
 
-Text → styled glyph raster (Pillow) → Zhang-Suen skeleton → stroke trace →
-**synthetic stylus events** injected on the device. xochitl draws them, so the
-result is real, saved, erasable notebook ink — no rm2fb, no display hacks.
-Technique from [riddle](https://github.com/MaximeRivest/riddle), reimplemented
-in Python for RM2 (armv7).
+Text → glyph raster (Pillow) → Zhang-Suen skeleton → stroke trace → **synthetic
+stylus events** injected on the device; xochitl draws them. No display hacks,
+no rm2fb. Technique from [riddle](https://github.com/MaximeRivest/riddle),
+reimplemented in Python for RM2 (armv7).
 
----
+| | |
+|---|---|
+| ![cursive](docs/example-full-page-cursive.png) | ![captured](docs/example-captured-loop.png) |
+| engine output (cursive style) | a page as Monke sees it (captured from pen events) |
 
-## Daily use (from the PC)
+## The loop
 
-Everything runs over ssh; you never type on the tablet. **Open a notebook
-page on the RM2 first** — ink lands on whatever page is open.
+```
+you write on the tablet
+   └─ pen events stream to the host over ssh (no device-side server)
+      └─ 2.8s idle → page committed → cropped image + persona + last 6 turns
+         └─ vision LLM (Gemini free tier / LM Studio / any OpenAI-compatible)
+            └─ reply → handwriting strokes → injected back as real ink
+```
+
+Status marker (bottom-right, real ink): hollow circle = watching · filled =
+thinking · dash = paused. **Toggle from the tablet: hold a finger ~1s on the
+marker.** Optional riddle mode (`fade = true`): your words dissolve, the
+answer appears in their place, lingers, dissolves — page returns clean.
+
+## Quick start (daemon on your PC)
 
 ```sh
-# on-device writer (uses styles installed by vellum):
-ssh rm2 '/home/root/.vellum/bin/smriti-write "hello monke"'
-ssh rm2 '/home/root/.vellum/bin/smriti-write -s print -y 400 "print style, lower on page"'
-ssh rm2 '/home/root/.vellum/bin/smriti-write -h'          # list styles + flags
+uv sync
+uv run python host/ink.py selfcheck
+uv run python host/monke.py          # marker appears; write; pause; reply inks
+```
 
-# host-side writer (better cursive joins, uses repo styles directly):
+Manual writing without the daemon:
+
+```sh
+ssh rm2 '/home/root/.vellum/bin/smriti-write "hello monke"'
 uv run python host/write.py "hello monke" --style cursive
 ```
 
-`smriti-write` flags: `-s` style · `-x`/`-y` start position (px, 1404×1872
-canvas) · `-w` wrap width · `-p` waypoint step.
+## Full setup on a NEW system
 
-> Full path needed because vellum's PATH line lives in `.bashrc`, which
-> non-interactive ssh skips.
+Three pieces: tablet package (once per device), host daemon (PC or server),
+AI endpoint (any).
 
-## One-time install (fresh device / after OS update)
+### 1. Tablet (reMarkable 2, once)
 
-Assumes ssh key auth to the device already works (`ssh rm2`).
+ssh access assumed (password in Settings → General → Help → Copyrights).
 
 ```sh
-# 1. install vellum (package manager, lives entirely in /home/root/.vellum)
-ssh rm2
+# on the RM2 — install vellum (package manager, lives in /home/root/.vellum):
 wget --no-check-certificate -O bootstrap.sh https://github.com/vellum-dev/vellum-cli/releases/latest/download/bootstrap.sh
 echo "18a4b0123160a1b547fa9f396005ce8c9caf2330bf3ff6fa39bb2eb27891cca8  bootstrap.sh" | sha256sum -c && bash bootstrap.sh
 exec bash --login
 
-# 2. trust the Smriti repo (still on the device)
+# trust the Smriti apk repo + install:
 cd /home/root/.vellum/etc/apk
 wget -q --no-check-certificate -O "keys/naivedya.sahu2@gmail.com-6a4bae6f.rsa.pub" \
   "https://naivedya-sahu.github.io/Smriti/naivedya.sahu2@gmail.com-6a4bae6f.rsa.pub"
 echo "https://naivedya-sahu.github.io/Smriti" >> repositories
-
-# 3. install
 vellum update && vellum add smriti
-
-# 4. open a notebook page, then:
-/home/root/.vellum/bin/smriti-write "hello monke"
 ```
 
-After an OS update: rerun step 1's `bootstrap.sh`? No — run `vellum reenable`
-first; only re-bootstrap if vellum itself is gone.
+Updates forever after: `vellum update && vellum upgrade`. After a reMarkable
+OS update: `vellum reenable`.
 
-## Updating (the whole point)
-
-Every release lands with:
+### 2. Host — PC, Pi 5, or any Linux VPS
 
 ```sh
-ssh rm2 '/home/root/.vellum/bin/vellum update && /home/root/.vellum/bin/vellum upgrade'
+git clone https://github.com/Naivedya-sahu/Smriti ~/smriti
+~/smriti/deploy/setup-server.sh     # uv, venv, keys, systemd unit, checklist
 ```
 
-No scp, no scripts. GitHub Pages CDN caches the index up to 10 min — if
-`upgrade` says nothing new right after a release, wait and retry.
-
-## Changing styles / releasing (dev machine)
-
-Styles live in [styles.toml](styles.toml): font + size + weight + slant +
-pressure. Fonts: Dancing Script + Patrick Hand (SIL OFL, `fonts/`).
+The script prints a 5-step checklist; the only manual parts are pasting the
+generated pubkey into the tablet's `authorized_keys` and making `ssh rm2`
+resolve on YOUR network (USB `10.11.99.1`, LAN IP, or tailscale —
+`vellum add tailscale` exists on the tablet; note: userspace networking).
 
 ```sh
-uv sync                                   # once
-uv run python host/ink.py selfcheck
-uv run python host/ink.py preview "test" --style cursive -o p.png   # no device needed
-
-deploy/release.sh "message"               # Docker Desktop must be running
+sudo systemctl enable --now smriti-monke@$USER    # always-on daemon
+journalctl -fu smriti-monke@$USER
 ```
 
-release.sh: regenerates stroke-fonts → bumps pkgrel → commits+pushes → builds
-signed apk (abuild in Alpine container) → publishes to the gh-pages apk repo.
-Then upgrade on device (command above).
+### 3. AI endpoint
+
+`[ai]` in [config.toml](config.toml) — anything speaking
+`/v1/chat/completions` with vision. Measured on this project:
+
+| Endpoint | Vision latency | Cost |
+|---|---|---|
+| Gemini flash-lite (default) | ~1.8s | free tier |
+| LM Studio, qwen3-vl-4b local | ~7s | free, offline |
+| Groq / OpenRouter | 1-3s | free tiers |
+
+Key goes in env `GEMINI_API_KEY` (Windows: `setx`, read from registry too;
+Linux: `~/.config/smriti/env` used by the systemd unit).
+
+**Hermes seam:** the same `[ai]` block is the backend toggle — when a Hermes
+agent (memory/KB spine on the Pi) exposes an OpenAI-compatible endpoint,
+point `base_url` at it and Monke routes through Hermes. No code change.
+
+## Watching the screen remotely
+
+[goMarkableStream](https://github.com/owulveryck/goMarkableStream) — single
+static binary on the tablet, streams the live screen to any browser
+(firmware 3.24+, works over tailscale). Useful for verifying Monke's ink
+without picking the tablet up.
+
+## Styles / releasing
+
+Styles = font + size + weight + slant + pressure in [styles.toml](styles.toml)
+(Dancing Script, Patrick Hand — SIL OFL). Release pipeline:
+
+```sh
+deploy/release.sh "message"   # fonts → pkgrel bump → signed apk → gh-pages
+```
+
+Device picks it up with `vellum upgrade`. Docker Desktop must be running.
 
 ## Layout
 
 ```
-host/ink.py        engine: text → strokes; compiles device stroke-fonts (.sf)
-host/write.py      host-side writer (renders full lines, pipes to lamp via ssh)
-device/smriti-write  on-device writer (busybox sh + awk, zero deps)
-device/replay.awk    stroke-font replayer (.sf → lamp commands)
-device/bin/lamp      pen-event injector (armv7; salvaged Elxnk lamp, patched:
-                     distance-scaled interpolation, ~10x faster than stock)
-device/fonts/*.sf    compiled stroke-fonts (build artifacts, committed)
-styles.toml        writing styles
-VELBUILD           vellum/apk package recipe
-deploy/release.sh  release pipeline
+host/monke.py      the daemon: loop, marker, toggle, fade, persona
+host/capture.py    pen/touch event streams → strokes → page PNG
+host/ink.py        text → handwriting strokes; compiles .sf stroke-fonts
+host/oracle.py     AI provider (any OpenAI-compatible endpoint)
+host/write.py      manual writer (dev tool)
+device/            what the apk installs: smriti-write, replay.awk,
+                   patched lamp (pen-event injector), stroke-fonts
+deploy/            release.sh, setup-server.sh, systemd unit
 ```
 
-lamp source: `Archive\RM_Projects\rm2elxnk\archive\src\lamp` (+ this repo's
-speed patch, see STATE.md). Rebuild: debian container, g++-arm-linux-gnueabihf
-+ okp, `make compile`.
+lamp source: Elxnk-era rmkit tool (Archive), patched: distance-scaled event
+interpolation for pen AND eraser (~10-20x faster than stock). Rebuild:
+debian container + g++-arm-linux-gnueabihf + `pip install okp` + `make compile`.
 
 ## Troubleshooting
 
-- **No ink appears**: is a notebook page open (not the file browser)? Is the
-  package installed (`vellum info smriti`)?
-- **`smriti-write: not found`**: use the full path `/home/root/.vellum/bin/smriti-write`.
-- **Upgrade sees nothing new**: CDN cache — wait up to 10 min. Verify the
-  published index: the repo's gh-pages branch, `armv7/APKINDEX.tar.gz`.
-- **Writing looks chunky**: raise waypoint density: `smriti-write -p 2 "..."`.
+- **No ink**: notebook page open? `vellum info smriti` on tablet? `ssh rm2 'echo ok'`?
+- **Strokes ignored right after a reply/toggle**: the daemon drains its own
+  ink echo for ~1s — wait for the hollow circle before writing.
+- **Reply overwrites old ink**: it only knows ink from this session — start
+  the daemon on a fresh page.
+- **Upgrade sees nothing**: GitHub Pages CDN caches ≤10 min.
+- **Writing looks chunky**: `waypoint_step = 2` in config.toml.
