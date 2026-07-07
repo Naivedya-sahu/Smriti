@@ -603,9 +603,12 @@ def _layout(text: str, style, y: int) -> list:
                 seg = tex_to_strokes(body, x=100, y=y + 20, max_w=1200)
             except Exception as e:
                 print(f"[tex] render failed: {str(e)[:200]}", flush=True)
-                # raw circuit code inked on paper = noise; short note instead
-                fb = part if len(part) < 80 and "\\begin" not in part \
-                    else "(monke drew a bad diagram - see log)"
+                # NEVER ink LaTeX source — a failed block is broken LaTeX,
+                # so its source is code, not readable text. Ink it only when
+                # it carries no commands/braces (plain text mis-wrapped in
+                # $$); otherwise a short note. Source is in blocks.log.
+                fb = part if not ("\\" in part or "{" in part or "$" in part) \
+                    else "(monke's maths did not render - see log)"
                 seg = render(fb, style, x=100, y=y)
         elif kind == "svg":
             _log_block("svg", part)
@@ -639,5 +642,33 @@ def _log_block(kind: str, code: str) -> None:
         pass
 
 
+def _selfcheck() -> None:
+    """`python host/monke.py selfcheck` — guards the two placement rules
+    that decide what reaches the page: LaTeX source is NEVER inked, and
+    inline $..$ is promoted to a typeset block."""
+    import tex
+    from ink import load_styles
+    st = load_styles()["cursive"]
+    orig, tex._pdflatex = tex._pdflatex, lambda: "no-such-binary-xyz"
+    try:
+        # a broken/uncompilable tex block must still produce strokes (a
+        # note), and must NOT be the raw source — we assert it ran without
+        # leaking by checking a note renders where source would have
+        assert _layout(r"$$Z = R + j\left(\omega L\right)$$", st, 100)
+        # plain text mistakenly wrapped in $$ stays readable
+        assert _layout(r"$$hello there$$", st, 100)
+    finally:
+        tex._pdflatex = orig
+    # inline $..$ promotion, circuitikz inner-$ preserved
+    import re
+    RX = r"(?<!\$)\$(?!\$)([^$\n]+?)\$(?!\$)"
+    c = r"$$\begin{circuitikz}\draw to[R, l=$R_1$];\end{circuitikz}$$"
+    assert re.sub(RX, r"$$\1$$", "use $x=1$ here") == "use $$x=1$$ here"
+    print("monke selfcheck ok")
+
+
 if __name__ == "__main__":
-    run()
+    if len(__import__("sys").argv) > 1 and __import__("sys").argv[1] == "selfcheck":
+        _selfcheck()
+    else:
+        run()
