@@ -1,0 +1,14 @@
+# /etc/systemd/system/smriti-eye-watch.service
+# NOTE: rootfs units are wiped by reMarkable OS updates — reinstall after
+# an update (see README).
+[Unit]
+Description=Smriti eye bridge (QML eye <-> Monke daemon)
+After=network.target
+
+[Service]
+ExecStart=/home/root/.vellum/bin/smriti-eye-watch
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

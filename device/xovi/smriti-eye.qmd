@@ -1,0 +1,79 @@
+{Smriti floating eye — xovi/qt-resource-rebuilder patch.
+
+Injects a small always-on-top eye button into the document view
+(SceneViewGestures.qml, same AFFECT target as rm-hacks' gestures.qmd).
+Drawn UI, NOT ink: no lamp round trips, nothing on the page.
+
+  dash   = daemon idle        tap -> start session
+  pupil  = session watching   tap -> stop session
+
+Talks to the daemon through files (QML XHR can read/write file:// —
+same trick rm-hacks uses for colorSet.json). smriti-eye-watch bridges
+/home/root/.smriti/eye-cmd to the daemon over the tailnet and refreshes
+/home/root/.smriti/state.}
+
+AFFECT [[17298303916558156758]]
+	TRAVERSE [[254504370080162629]]
+		LOCATE BEFORE ALL
+		INSERT {
+		Rectangle {
+			id: smritiEyeUi
+			property bool watching: false
+			width: 56
+			height: 56
+			radius: 28
+			color: "white"
+			border.color: "black"
+			border.width: 3
+			z: 9999
+			anchors.right: parent.right
+			anchors.bottom: parent.bottom
+			anchors.rightMargin: 18
+			anchors.bottomMargin: 18
+
+			Rectangle {
+				anchors.centerIn: parent
+				width: 16
+				height: 16
+				radius: 8
+				color: "black"
+				visible: smritiEyeUi.watching
+			}
+			Rectangle {
+				anchors.centerIn: parent
+				width: 24
+				height: 5
+				color: "black"
+				visible: !smritiEyeUi.watching
+			}
+
+			Timer {
+				interval: 3000
+				running: true
+				repeat: true
+				triggeredOnStart: true
+				onTriggered: {
+					var xhr = new XMLHttpRequest();
+					xhr.open("GET", "file:///home/root/.smriti/state");
+					xhr.onreadystatechange = function() {
+						if (xhr.readyState === XMLHttpRequest.DONE) {
+							smritiEyeUi.watching = (xhr.responseText.indexOf("watching") === 0);
+						}
+					};
+					xhr.send();
+				}
+			}
+
+			MouseArea {
+				anchors.fill: parent
+				onClicked: {
+					var xhr = new XMLHttpRequest();
+					xhr.open("PUT", "file:///home/root/.smriti/eye-cmd");
+					xhr.send(smritiEyeUi.watching ? "stop" : "start");
+					smritiEyeUi.watching = !smritiEyeUi.watching;
+				}
+			}
+		}
+		}
+	END TRAVERSE
+END AFFECT

@@ -1,0 +1,8 @@
+{
+    "name": "Smriti",
+    "loadsBackend": false,
+    "entry": "/ui/smriti.qml",
+    "id": "smriti-toolbox",
+    "supportsScaling": true,
+    "canHaveMultipleFrontends": false
+}

@@ -1,0 +1,33 @@
+#!/bin/sh
+# smriti-eye-watch — bridge between the QML floating eye and the daemon.
+#
+# The eye (xovi qmldiff patch) writes "start"/"stop" into eye-cmd via
+# XMLHttpRequest file:// PUT; this loop forwards the command to the daemon
+# (smriti-eye -> tailscale nc) and keeps the state file fresh so the eye
+# shows the true daemon state.
+DIR=/home/root/.smriti
+CMD=$DIR/eye-cmd
+STATE=$DIR/state
+EYE=/home/root/.vellum/bin/smriti-eye
+
+mkdir -p "$DIR"
+n=0
+while true; do
+    if [ -f "$CMD" ]; then
+        c=$(cat "$CMD" 2>/dev/null)
+        rm -f "$CMD"
+        case "$c" in
+            start|stop)
+                "$EYE" "$c" >/dev/null 2>&1
+                # optimistic; the periodic sync below corrects if it failed
+                [ "$c" = start ] && echo watching > "$STATE" || echo idle > "$STATE"
+                ;;
+        esac
+    fi
+    n=$((n + 1))
+    if [ $((n % 30)) -eq 0 ]; then
+        s=$("$EYE" status 2>/dev/null | tr -d '\r\n')
+        [ -n "$s" ] && echo "$s" > "$STATE"
+    fi
+    sleep 1
+done

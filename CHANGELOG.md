@@ -21,6 +21,12 @@
   the ssh link even when idle.
 - capture: `--touchtest` (live finger coords, both x orientations),
   `--workarea` (live floor + free bands).
+- **Smriti toolbox app** (xovi/AppLoad): drawn launcher UI — tap the big
+  eye to start/stop sessions, live daemon state. No ink, no lamp round
+  trips. QML frontend + `smriti-eye-watch` file bridge
+  (`/home/root/.smriti/{eye-cmd,state}`) + `tailscale nc` to the daemon.
+- Experimental (repo only, not deployed): `device/xovi/smriti-eye.qmd` —
+  floating in-notebook eye via qt-resource-rebuilder qmldiff patch.
 
 ## v0.1.4 — the loop (2026-07-06 → 07-07)
 - Monke daemon: write → idle commit → vision LLM → handwritten ink reply.

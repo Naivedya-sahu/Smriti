@@ -40,6 +40,38 @@ ssh+lamp round trip and erases real ink in the corner).
   daemon's control port over the tailnet). Same via
   `curl http://<daemon-host>:7333/start|stop|status` from anywhere.
 
+### Smriti toolbox app (xovi/AppLoad, drawn UI — no ink)
+
+With [xovi](https://remarkable.guide/guide/software/xovi.html) +
+[AppLoad](https://github.com/asivery/rm-appload) on the tablet (one-click
+via reManager), Smriti ships a launcher app: a big eye you tap to
+start/stop sessions, plus live daemon state. Pure screen UI — zero lamp
+round trips, nothing drawn on your notebook page.
+
+```
+device/appload/smriti/   manifest.json + icon + resources.rcc (QML UI)
+device/bin/smriti-eye-watch   bridge: app <-> daemon (file cmd/state)
+```
+
+Install (from this repo):
+
+```sh
+scp device/appload/smriti/{manifest.json,icon.png,resources.rcc} \
+    root@rm2:/home/root/xovi/exthome/appload/smriti/
+scp device/bin/smriti-eye-watch root@rm2:/home/root/.vellum/bin/
+scp device/xovi/smriti-eye-watch.service root@rm2:/etc/systemd/system/
+ssh root@rm2 'chmod +x /home/root/.vellum/bin/smriti-eye-watch &&
+  systemctl daemon-reload && systemctl enable --now smriti-eye-watch &&
+  systemctl restart xochitl'
+```
+
+Rebuild the UI after editing `ui/smriti.qml`:
+`uvx --from pyside6 pyside6-rcc --binary application.qrc -o resources.rcc`.
+How it talks: the QML frontend reads/writes `/home/root/.smriti/{state,eye-cmd}`
+via XHR `file://`; `smriti-eye-watch` forwards commands to the daemon over
+`tailscale nc` and refreshes the state file. (systemd units on the rootfs
+are wiped by OS updates — rerun the install lines after updating.)
+
 Optional riddle mode (`fade = true`): your words dissolve, the answer
 appears in their place, lingers, dissolves — page returns clean.
 
