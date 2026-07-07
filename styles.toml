@@ -1,4 +1,27 @@
 # Smriti writing styles. Change here → rebuild → `vellum upgrade` → new hand on device.
+#
+# ADDING A CUSTOM FONT (any .ttf or .otf):
+#   1. drop the file into fonts/
+#   2. add a [style.<name>] block — knobs:
+#        font        path to the ttf/otf
+#        size        glyph size in page px (font sizing)
+#        line_height line spacing, multiple of size (1.5 = airy, 1.2 = tight)
+#        wght        variable-font weight axis (omit for static fonts)
+#        slant       extra italic shear in degrees
+#        pressure    pen pressure of the strokes (max 4095)
+#        decimate    stroke point thinning (higher = faster, chunkier)
+#   3. use it: reply_style = "<name>" in config.toml [monke], or test with
+#      `uv run python host/write.py "text" --style <name>`.
+# [monke] reply_size / reply_line_height in config.toml override the chosen
+# style's size and spacing without editing this file.
+
+[style.cartoon]
+font = "fonts/ComicNeue-Bold.ttf"
+size = 60
+slant = 0.0
+pressure = 2800
+decimate = 2
+line_height = 1.4
 
 [style.cursive]
 font = "fonts/DancingScript.ttf"

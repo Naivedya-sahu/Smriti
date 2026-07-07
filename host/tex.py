@@ -26,6 +26,20 @@ import pypdfium2 as pdfium
 
 from ink import skeletonize, trace
 
+
+def _pdflatex() -> str:
+    """pdflatex from SMRITI_PDFLATEX env, PATH, or a user-space TinyTeX
+    (~/.TinyTeX) — systemd services don't see the login PATH."""
+    import os
+    import shutil
+    if (p := os.environ.get("SMRITI_PDFLATEX")):
+        return p
+    if (p := shutil.which("pdflatex")):
+        return p
+    hits = sorted(Path.home().glob(".TinyTeX/bin/*/pdflatex"))
+    return str(hits[0]) if hits else "pdflatex"
+
+
 TEMPLATE = r"""\documentclass[preview,border=6pt]{standalone}
 \usepackage{amsmath,amssymb}
 \usepackage{circuitikz}
@@ -43,7 +57,7 @@ def tex_to_image(tex: str) -> np.ndarray:
         src = Path(td) / "main.tex"
         src.write_text(TEMPLATE % tex, encoding="utf-8")
         r = subprocess.run(
-            ["pdflatex", "-interaction=nonstopmode", "-halt-on-error", "main.tex"],
+            [_pdflatex(), "-interaction=nonstopmode", "-halt-on-error", "main.tex"],
             cwd=td, capture_output=True, text=True, timeout=180)
         pdf = Path(td) / "main.pdf"
         if r.returncode != 0 or not pdf.exists():

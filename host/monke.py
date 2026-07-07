@@ -295,13 +295,20 @@ def run() -> None:
     host = cfg["capture"]["host"]
     idle = cfg["capture"].get("idle_seconds", 2.8)
     m = cfg.get("monke", {})
-    style = load_styles()[m.get("reply_style", "cursive")]
+    style = dict(load_styles()[m.get("reply_style", "cursive")])
+    if "reply_size" in m:                       # font sizing override
+        style["size"] = m["reply_size"]
+    if "reply_line_height" in m:                # line spacing override
+        style["line_height"] = m["reply_line_height"]
     step = m.get("waypoint_step", 3)
     bottom = m.get("page_bottom", 1780)
     max_turns = m.get("history_turns", 6)
     fade = m.get("fade", False)
     fade_hold = m.get("fade_hold", 10)
     greet_fade = m.get("greet_fade", True)   # erase greeting once answered
+    input_fade = m.get("input_fade", False)  # also erase the user's input at
+                                             # reply time — frees space, reply
+                                             # lands where the question was
     global MARKER_INK
     MARKER_INK = m.get("marker_ink", False)
 
@@ -401,7 +408,7 @@ def run() -> None:
                     floor = _reply(strokes, style, step, bottom, host, history,
                                    floor, fade, fade_hold,
                                    greet=greet_ink if greet_fade else None,
-                                   shot=now)
+                                   shot=now, input_fade=input_fade)
                     greet_ink = []
                     _save_floor(floor)
                     del history[:-2 * max_turns]
@@ -495,7 +502,8 @@ def _greet(style, step, bottom, host, history, floor) -> tuple[int, list]:
 
 
 def _reply(strokes, style, step, bottom, host, history, floor,
-           fade=False, fade_hold=10, greet=None, shot=None) -> int:
+           fade=False, fade_hold=10, greet=None, shot=None,
+           input_fade=False) -> int:
     """Returns the new ink floor (max y written this session)."""
     marker("busy", host)
     print(f"page committed ({len(strokes)} strokes) -> asking monke…", flush=True)
@@ -512,6 +520,10 @@ def _reply(strokes, style, step, bottom, host, history, floor,
     if greet:
         # the greeting served its purpose — fade it before the answer lands
         erase_box(greet, host)
+    if input_fade and strokes:
+        # user opted in: the question fades too, the answer takes its place
+        erase_box(strokes, host)
+        shot = _shot()                      # freed space is real now
 
     # ponytail: fade/riddle mode DISABLED pending visual verification on
     # device — erase sweep width/completeness unconfirmed. Re-enable by
@@ -530,7 +542,11 @@ def _reply(strokes, style, step, bottom, host, history, floor,
     # keep mode: place below everything inked this session, not just this
     # commit — else writing above an old reply would overwrite it. If that
     # overflows, _place retries inside a free band from the screenshot.
-    y = max(floor, max(py for s in strokes for _, py in s)) + 50
+    # input_fade: the question was just erased — answer starts where it was.
+    if input_fade and strokes:
+        y = max(150, min(py for s in strokes for _, py in s))
+    else:
+        y = max(floor, max(py for s in strokes for _, py in s)) + 50
     reply = _place(text, style, y, shot, bottom)
     if reply is None:
         # won't fit — turn pages (injected finger swipe) until one has room;
