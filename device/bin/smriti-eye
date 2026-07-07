@@ -20,7 +20,9 @@ PORT="${D##*:}"
 
 case "$1" in
     start|stop|status)
-        printf 'GET /%s HTTP/1.0\r\nHost: %s\r\n\r\n' "$1" "$HOST" \
+        # sleep keeps stdin open — tailscale nc hangs up on stdin EOF
+        # before the reply arrives otherwise
+        ( printf 'GET /%s HTTP/1.0\r\nHost: %s\r\n\r\n' "$1" "$HOST"; sleep 2 ) \
             | /home/root/.vellum/bin/tailscale nc "$HOST" "$PORT" \
             | sed '1,/^\r*$/d'
         ;;

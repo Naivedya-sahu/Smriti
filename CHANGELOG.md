@@ -10,6 +10,17 @@
 - Endpoint selection documented + retargeted for the tailnet: primary Gemini
   (now fast from the Pi — old ~540s hang gone), fallback = desktop LM Studio
   `qwen/qwen3-vl-8b` over tailscale IP. Env override order in config.toml.
+- oracle: IPv4 preferred (fixes the Pi→Gemini IPv6 blackhole hang); 60s
+  timeout so the fallback actually gets a turn.
+- HTTP control plane (:7333 /start /stop /status) + on-tablet `smriti-eye`
+  CLI (rides `tailscale nc` — userspace tailscaled has no tun for wget).
+- Ink eye marker now optional and OFF by default (`marker_ink`) — each
+  redraw cost an ssh+lamp round trip and erased real corner ink; the corner
+  gesture zone works without it.
+- Pen stream (event1) opened only while a session is on — hover flooded
+  the ssh link even when idle.
+- capture: `--touchtest` (live finger coords, both x orientations),
+  `--workarea` (live floor + free bands).
 
 ## v0.1.4 — the loop (2026-07-06 → 07-07)
 - Monke daemon: write → idle commit → vision LLM → handwritten ink reply.

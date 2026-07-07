@@ -106,8 +106,18 @@ def erase_box(strokes: list, host: str, pad: int = 12, sweep: int = 14) -> None:
     lamp("\n".join(cmds) + "\n", host)
 
 
+# Drawing the eye as real ink costs an ssh+lamp round trip (~1-2s) per state
+# change plus an echo drain, and the eraser wipes real ink in the corner.
+# Off by default: the corner GESTURE zone works without any drawn marker,
+# the greeting ink confirms session-on, `smriti-eye status` reports state.
+# Turn back on with [monke] marker_ink = true.
+MARKER_INK = False
+
+
 def marker(state: str, host: str) -> None:
     """'watch' open eye, 'busy' filled, 'pause' dash (idle), 'off' erased."""
+    if not MARKER_INK:
+        return
     wipe = "".join(f"erase circle {MARKER_X} {MARKER_Y} {r}\n" for r in (18, 13, 8, 4, 1))
     draw = ""
     if state == "watch":
@@ -265,6 +275,8 @@ def run() -> None:
     max_turns = m.get("history_turns", 6)
     fade = m.get("fade", False)
     fade_hold = m.get("fade_hold", 10)
+    global MARKER_INK
+    MARKER_INK = m.get("marker_ink", False)
 
     # pen stream (event1) is opened only while a session is ON: a hovering
     # pen floods evdev even when idle, and that all rides the ssh link.

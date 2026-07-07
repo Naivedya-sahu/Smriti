@@ -45,6 +45,11 @@ host = "rm2"                # ssh alias for the tablet (see README)
 idle_seconds = 2.8
 
 [monke]
+marker_ink = false          # draw the corner eye as real ink. Costly: each
+                            # state change = ssh+lamp round trip + echo drain,
+                            # and erasing wipes real ink in the corner. The
+                            # corner tap/hold gestures + smriti-eye CLI work
+                            # fine without it.
 reply_style = "cursive"     # any style from styles.toml
 waypoint_step = 3           # lower = smoother, slower
 page_bottom = 1780          # reply overflowing this -> page-turn swipe

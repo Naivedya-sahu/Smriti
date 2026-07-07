@@ -23,17 +23,22 @@ you write on the tablet
             └─ reply → handwriting strokes → injected back as real ink
 ```
 
-### Sessions — the eye marker (bottom-right, real ink)
+### Sessions — the corner eye
 
-The daemon boots **idle**: a dash in the corner, nothing captured, no AI.
+The daemon boots **idle**: nothing captured, no AI. The bottom-right corner
+is the eye — a touch zone (and optionally a drawn ink marker,
+`marker_ink = true`; off by default since every marker redraw costs an
+ssh+lamp round trip and erases real ink in the corner).
 
-- **Tap the eye** → session starts: Monke scans the visible page
-  (screenshot), inks a short greeting below your ink, then watches
-  (open eye = watching, filled = thinking).
+- **Tap the corner** → session starts: Monke scans the visible page
+  (screenshot), inks a short greeting below your ink, then watches.
 - Write → pause ~3s → reply inks below your writing. Placement uses a
   **workarea parser** on a real screenshot: replies land in free bands
   between existing ink, page-turn only when nothing fits.
-- **Hold the eye ~1s** → session off (dash again). No laptop needed.
+- **Hold the corner ~1s** → session off. No laptop needed.
+- From the tablet shell: `smriti-eye start|stop|status` (talks to the
+  daemon's control port over the tailnet). Same via
+  `curl http://<daemon-host>:7333/start|stop|status` from anywhere.
 
 Optional riddle mode (`fade = true`): your words dissolve, the answer
 appears in their place, lingers, dissolves — page returns clean.
