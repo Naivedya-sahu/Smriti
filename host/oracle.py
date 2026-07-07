@@ -52,6 +52,8 @@ def load_ai_config() -> dict:
         cfg["base_url"] = b
     if (m := os.environ.get("SMRITI_AI_MODEL")):
         cfg["model"] = m
+    if (k := os.environ.get("SMRITI_AI_KEY")):
+        cfg["api_key"] = k
     if "ai_fallback" in full:
         cfg["_fallback"] = _resolve(full["ai_fallback"])
     return cfg
