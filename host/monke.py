@@ -40,7 +40,10 @@ REPO_CFG = __import__("pathlib").Path(__file__).resolve().parents[1] / "config.t
 
 MONKE_SYSTEM = """\
 You are Monke, the spirit living inside Navy's paper diary (an e-ink tablet
-called Smriti). You are shown a photo of what Navy just handwrote.
+called Smriti). You are shown a photo of the visible page. Strokes drawn in
+RED are what Navy JUST wrote — reply to those. Everything in black is page
+context: earlier conversation (including your own past replies), diagrams,
+document content. Use the context, answer the red.
 
 Voice: terse, primal-wise caveman. Short sentences. Warm but blunt. You know
 Navy: electrical engineer, builds things, starts MS research at IIT Delhi
@@ -163,7 +166,7 @@ def _screen_floor(cfg=None) -> int | None:
         with open(REPO_CFG, "rb") as f:
             cfg = tomllib.load(f)
     s = cfg.get("screen", {})
-    img = screenshot(s.get("url", "https://10.11.99.1:2001"),
+    img = screenshot(__import__("os").environ.get("SMRITI_SCREEN_URL") or s.get("url", "https://10.11.99.1:2001"),
                      s.get("user", "admin"), s.get("password", "password"))
     return ink_floor(img) if img is not None else None
 
@@ -280,15 +283,41 @@ def run() -> None:
         print("monke sleeps.", flush=True)
 
 
+def _page_context(strokes) -> bytes:
+    """Vision input: real page screenshot with the fresh strokes overlaid in
+    red — model sees full context (old replies, diagrams, documents) AND
+    exactly what is new. Falls back to plain stroke render if the
+    goMarkableStream service is unreachable."""
+    from PIL import ImageDraw
+    shot = None
+    try:
+        with open(REPO_CFG, "rb") as f:
+            s = tomllib.load(f).get("screen", {})
+        shot = screenshot(__import__("os").environ.get("SMRITI_SCREEN_URL") or s.get("url", "https://10.11.99.1:2001"),
+                          s.get("user", "admin"), s.get("password", "password"))
+    except Exception:
+        pass
+    if shot is None:
+        img = render_strokes(strokes, crop=True)
+    else:
+        img = shot.convert("RGB")
+        d = ImageDraw.Draw(img)
+        for s_ in strokes:
+            if len(s_) > 1:
+                d.line(s_, fill=(220, 0, 0), width=4)
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    return buf.getvalue()
+
+
 def _reply(strokes, style, step, bottom, host, history, floor,
            fade=False, fade_hold=10) -> int:
     """Returns the new ink floor (max y written this session)."""
     marker("busy", host)
-    buf = io.BytesIO()
-    render_strokes(strokes, crop=True).save(buf, format="PNG")
     print(f"page committed ({len(strokes)} strokes) -> asking monke…", flush=True)
     t0 = time.time()
-    user = image_msg(buf.getvalue(), "Navy just wrote this. Reply.")
+    user = image_msg(_page_context(strokes),
+                     "The red strokes are Navy's newest writing. Reply.")
     text = chat([{"role": "system", "content": MONKE_SYSTEM}] + history + [user])
     text = text.encode("ascii", "ignore").decode().strip()
     history += [user, {"role": "assistant", "content": text}]
