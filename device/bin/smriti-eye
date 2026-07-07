@@ -1,0 +1,31 @@
+#!/bin/sh
+# smriti-eye — drive the Monke session daemon from the tablet, no touch
+# gesture needed:
+#
+#   smriti-eye start     begin a session (scan + greeting + watch)
+#   smriti-eye stop      end the session (daemon goes idle)
+#   smriti-eye status    "watching" or "idle"
+#
+# Talks to host/monke.py's control port over the tailnet. RM2's tailscaled
+# runs userspace (no tun), so plain wget can't reach 100.x — `tailscale nc`
+# dials through the userspace stack instead.
+#
+# Daemon address: SMRITI_DAEMON=ip[:port] env, or persist it in
+# /home/root/.config/smriti-eye (a line: SMRITI_DAEMON=100.97.149.121:7333)
+[ -f /home/root/.config/smriti-eye ] && . /home/root/.config/smriti-eye
+D="${SMRITI_DAEMON:-100.97.149.121:7333}"
+HOST="${D%%:*}"
+PORT="${D##*:}"
+[ "$PORT" = "$HOST" ] && PORT=7333
+
+case "$1" in
+    start|stop|status)
+        printf 'GET /%s HTTP/1.0\r\nHost: %s\r\n\r\n' "$1" "$HOST" \
+            | /home/root/.vellum/bin/tailscale nc "$HOST" "$PORT" \
+            | sed '1,/^\r*$/d'
+        ;;
+    *)
+        echo "usage: smriti-eye start|stop|status" >&2
+        exit 1
+        ;;
+esac

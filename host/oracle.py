@@ -14,6 +14,7 @@ from __future__ import annotations
 import base64
 import json
 import os
+import socket
 import sys
 import tomllib
 import urllib.error
@@ -21,6 +22,19 @@ import urllib.request
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
+
+# Some networks blackhole IPv6 to Google (Pi: Gemini calls hang ~540s while
+# curl looks fine — curl races IPv4, urllib waits on IPv6). Prefer IPv4.
+_gai = socket.getaddrinfo
+
+
+def _gai4(*args, **kw):
+    res = _gai(*args, **kw)
+    v4 = [r for r in res if r[0] == socket.AF_INET]
+    return v4 or res
+
+
+socket.getaddrinfo = _gai4
 
 
 def _getkey(name: str) -> str:
@@ -84,7 +98,9 @@ def _chat(messages: list[dict], cfg: dict) -> str:
         headers={"Content-Type": "application/json",
                  "Authorization": f"Bearer {cfg['api_key']}"})
     try:
-        with urllib.request.urlopen(req, timeout=cfg.get("timeout", 300)) as r:
+        # 60s: long enough for a cold local model, short enough that the
+        # fallback provider gets a turn instead of the loop hanging
+        with urllib.request.urlopen(req, timeout=cfg.get("timeout", 60)) as r:
             return json.load(r)["choices"][0]["message"]["content"]
     except urllib.error.HTTPError as e:
         raise RuntimeError(f"{cfg['base_url']} -> HTTP {e.code}: "

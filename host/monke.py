@@ -138,7 +138,13 @@ class TouchGesture:
 
     def _in_corner(self) -> bool:
         sy = CANVAS_H - self.ty * CANVAS_H / TOUCH_Y_MAX
-        return self._sx() >= CORNER_X and sy >= CORNER_Y
+        sx = self._sx()
+        # ponytail: real panel x-orientation unverified — lamp-injected taps
+        # round-trip through lamp's own transform so they can't catch a
+        # mirror error; a real finger might read mirrored. Accept both x
+        # orientations until `capture.py --touchtest` with a real finger
+        # settles it, then delete the mirrored branch.
+        return sy >= CORNER_Y and (sx >= CORNER_X or CANVAS_W - sx >= CORNER_X)
 
     def feed(self, ev) -> str | None:
         _, _, etype, code, value = ev
@@ -211,6 +217,42 @@ def _drain(*qs: queue.Queue) -> None:
         _pull(q)
 
 
+def _control_server(ctl: queue.Queue, state: dict, port: int = 7333) -> None:
+    """Tiny HTTP control plane: GET /start, /stop, /status. Lets the tablet
+    (smriti-eye CLI) or any curl drive sessions without touch gestures."""
+    import http.server
+    import threading
+
+    class H(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            p = self.path.strip("/")
+            if p in ("start", "stop"):
+                ctl.put(p)
+                body = f"{p} queued\n"
+            elif p == "status":
+                body = ("watching" if state.get("watching") else "idle") + "\n"
+            else:
+                self.send_error(404)
+                return
+            data = body.encode()
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+
+        def log_message(self, *a):
+            pass
+
+    try:
+        srv = http.server.ThreadingHTTPServer(("", port), H)
+    except OSError as e:
+        print(f"[control] port {port} unavailable ({e}) — HTTP control off",
+              flush=True)
+        return
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    print(f"[control] http://<this-host>:{port}/start|stop|status", flush=True)
+
+
 def run() -> None:
     with open(REPO_CFG, "rb") as f:
         cfg = tomllib.load(f)
@@ -224,10 +266,15 @@ def run() -> None:
     fade = m.get("fade", False)
     fade_hold = m.get("fade_hold", 10)
 
-    pen = Capture(host)
+    # pen stream (event1) is opened only while a session is ON: a hovering
+    # pen floods evdev even when idle, and that all rides the ssh link.
+    pen: Capture | None = None
     touch = Capture(host, "/dev/input/event2")
     sb = StrokeBuilder()
     tg = TouchGesture()
+    ctl: queue.Queue[str] = queue.Queue()
+    state = {"watching": False}
+    _control_server(ctl, state, cfg.get("control", {}).get("port", 7333))
     history: list[dict] = []
     strokes: list[list[tuple[int, int]]] = []
     # ink floor = lowest y known to hold ink. Primary source: a REAL
@@ -237,22 +284,30 @@ def run() -> None:
     paused = True                     # boot idle: no capture, no AI
     last_pen = 0.0
     marker("pause", host)
-    _drain(pen.q, touch.q)
+    _drain(touch.q)
     print("monke is idle — TAP the corner eye to start a session, "
-          "HOLD ~1s to stop one (Ctrl-C quits)", flush=True)
+          "HOLD ~1s to stop one; or smriti-eye start/stop from the tablet "
+          "(Ctrl-C quits)", flush=True)
 
     try:
         while True:
-            for ev in _pull(pen.q):
-                if ev is None:
-                    print("pen stream ended (device offline?)", flush=True)
-                    return
-                last_pen = time.time()
-                if not paused and (s := sb.feed(ev)) is not None:
-                    strokes.append(s)
+            if pen is not None:
+                for ev in _pull(pen.q):
+                    if ev is None:
+                        print("pen stream ended (device offline?)", flush=True)
+                        return
+                    last_pen = time.time()
+                    if not paused and (s := sb.feed(ev)) is not None:
+                        strokes.append(s)
+            cmds = _pull(ctl)         # smriti-eye / curl commands
             for ev in _pull(touch.q):
-                g = tg.feed(ev) if ev is not None else None
-                if g == "tap" and paused:
+                if ev is None:
+                    print("touch stream ended (device offline?)", flush=True)
+                    return
+                if (g := tg.feed(ev)) is not None:
+                    cmds.append(g)
+            for g in cmds:
+                if g in ("tap", "start") and paused:
                     # session start: scan the page, greet, watch
                     sf = _screen_floor(cfg)
                     floor = sf if sf is not None else _load_floor()
@@ -261,22 +316,28 @@ def run() -> None:
                           flush=True)
                     floor = _greet(style, step, bottom, host, history, floor)
                     _save_floor(floor)
+                    pen, sb = Capture(host), StrokeBuilder()
                     paused, strokes = False, []
+                    state["watching"] = True
                     marker("watch", host)
                     _drain(pen.q, touch.q)
                     print("watching", flush=True)
-                elif g == "hold" and not paused:
+                elif g in ("hold", "stop") and not paused:
                     paused, strokes = True, []
+                    state["watching"] = False
+                    if pen is not None:
+                        pen.close()
+                        pen = None
                     print("session off", flush=True)
                     marker("pause", host)
-                    _drain(pen.q, touch.q)
+                    _drain(touch.q)
                 elif g == "pageturn" and not paused:
                     time.sleep(1.0)          # let xochitl repaint
                     sf = _screen_floor(cfg)
                     floor = sf if sf is not None else 0
                     _save_floor(floor)
                     print(f"page turned — floor {floor}", flush=True)
-            if (not paused and strokes and not sb.touching
+            if (not paused and pen is not None and strokes and not sb.touching
                     and time.time() - last_pen >= idle):
                 floor = _reply(strokes, style, step, bottom, host, history, floor,
                                fade, fade_hold)
@@ -293,7 +354,8 @@ def run() -> None:
             marker("off", host)
         except Exception:
             pass
-        pen.close()
+        if pen is not None:
+            pen.close()
         touch.close()
         print("monke sleeps.", flush=True)
 

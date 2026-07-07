@@ -213,7 +213,35 @@ def main() -> None:
     ap.add_argument("--min-strokes", type=int, default=1)
     ap.add_argument("--workarea", action="store_true",
                     help="grab a live screenshot, print ink floor + free bands, exit")
+    ap.add_argument("--touchtest", action="store_true",
+                    help="decode finger touches live (both x orientations) — "
+                         "touch the bottom-right corner and see which mapping "
+                         "reads ~(1300, 1750)")
     a = ap.parse_args()
+    if a.touchtest:
+        cap = Capture(a.host, "/dev/input/event2")
+        print("touch the tablet (Ctrl-C to stop)…", flush=True)
+        tx = ty = 0
+        try:
+            while (ev := cap.q.get()) is not None:
+                _, _, etype, code, value = ev
+                if etype != EV_ABS:
+                    continue
+                if code == 53:            # ABS_MT_POSITION_X
+                    tx = value
+                elif code == 54:          # ABS_MT_POSITION_Y
+                    ty = value
+                elif code == 57 and value >= 0:   # ABS_MT_TRACKING_ID down
+                    sx = int(tx * CANVAS_W / 767)
+                    sy = CANVAS_H - int(ty * CANVAS_H / 1023)
+                    print(f"down raw=({tx},{ty})  noflip=({sx},{sy})  "
+                          f"xflip=({CANVAS_W - sx},{sy})  yflip-off=({sx},{CANVAS_H - sy})",
+                          flush=True)
+        except KeyboardInterrupt:
+            pass
+        finally:
+            cap.close()
+        return
     if a.workarea:
         import os
         img = screenshot(os.environ.get("SMRITI_SCREEN_URL", "https://10.11.99.1:2001"))
