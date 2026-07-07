@@ -23,6 +23,29 @@ you write on the tablet
             └─ reply → handwriting strokes → injected back as real ink
 ```
 
+### The floating eye (in-notebook UI)
+
+With xovi + qt-resource-rebuilder (one click in reManager), Smriti draws a
+**floating eye** at the bottom-right of every notebook page — screen UI,
+not ink: the pen and eraser can't touch it, and it never costs a lamp
+round trip. Install: copy `device/xovi/smriti-eye.qmd` into
+`/home/root/xovi/exthome/qt-resource-rebuilder/` and restart xochitl.
+
+The workflow:
+
+1. Open a notebook. Eye shows a **dash** — daemon idle, nothing captured.
+2. **Tap the eye** → session starts: the page is screenshotted, the
+   workarea parser finds the empty space, Monke greets you there in ink.
+3. Write; pause ~3s → your strokes + page context go to the AI endpoint;
+   the greeting fades (erased) and the answer is inked into free space —
+   prose in handwriting, `$$...$$` LaTeX and circuitikz typeset as real
+   previews, never raw code.
+4. **Tap the eye again** → session ends, eye shows the dash.
+
+The eye reflects true daemon state (polled every 3s through
+`/home/root/.smriti/state`). Online-only by design: tablet ↔ Pi over
+tailscale or USB; the Pi does all processing and AI routing.
+
 ### Sessions — the corner eye
 
 The daemon boots **idle**: nothing captured, no AI. The bottom-right corner
@@ -138,8 +161,9 @@ journalctl -fu smriti-monke@$USER
 `[ai]` in [config.toml](config.toml) — anything speaking
 `/v1/chat/completions` with vision. Selection order: env overrides
 (`SMRITI_AI_BASE_URL` / `SMRITI_AI_MODEL` / `SMRITI_AI_KEY`) → `[ai]` →
-`[ai_fallback]` (tried automatically when the primary errors). Measured
-on this project:
+`[[ai_fallback]]` chain, tried in order on any error (default chain:
+LM Studio over the tailnet, then a free hosted VL model). Swap models by
+editing config.toml — no code changes. Measured on this project:
 
 | Endpoint | Vision latency | Cost |
 |---|---|---|
@@ -159,6 +183,24 @@ with no port forwarding.
 **Hermes seam:** the same `[ai]` block is the backend toggle — when a Hermes
 agent (memory/KB spine on the Pi) exposes an OpenAI-compatible endpoint,
 point `base_url` at it and Monke routes through Hermes. No code change.
+
+## Testing each layer
+
+Every layer has its own CLI — test them independently when something breaks:
+
+| Layer | Command (host repo) | Expect |
+|---|---|---|
+| tablet ssh | `ssh rm2 'echo ok'` | ok |
+| pen events | `uv run python host/capture.py -o page.png` | write → PNG |
+| touch decode | `uv run python host/capture.py --touchtest` | finger coords |
+| screenshot | `uv run python host/screen.py shot out.png` | current screen |
+| workarea | `uv run python host/screen.py bands` | free bands |
+| AI chat | `uv run python host/oracle.py ask "hello"` | reply (falls through chain) |
+| AI vision | `uv run python host/oracle.py see page.png "read this"` | transcription |
+| ink output | `uv run python host/write.py "hi" --style cursive` | ink on tablet |
+| LaTeX | `uv run python host/tex.py` (see file docstring) | preview PNG |
+| daemon | `curl http://<daemon-host>:7333/status` | watching / idle |
+| tablet ctl | `smriti-eye status` (on the RM2) | watching / idle |
 
 ## Watching the screen remotely
 

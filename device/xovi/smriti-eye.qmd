@@ -1,17 +1,3 @@
-{Smriti floating eye — xovi/qt-resource-rebuilder patch.
-
-Injects a small always-on-top eye button into the document view
-(SceneViewGestures.qml, same AFFECT target as rm-hacks' gestures.qmd).
-Drawn UI, NOT ink: no lamp round trips, nothing on the page.
-
-  dash   = daemon idle        tap -> start session
-  pupil  = session watching   tap -> stop session
-
-Talks to the daemon through files (QML XHR can read/write file:// —
-same trick rm-hacks uses for colorSet.json). smriti-eye-watch bridges
-/home/root/.smriti/eye-cmd to the daemon over the tailnet and refreshes
-/home/root/.smriti/state.}
-
 AFFECT [[17298303916558156758]]
 	TRAVERSE [[254504370080162629]]
 		LOCATE BEFORE ALL
@@ -64,14 +50,20 @@ AFFECT [[17298303916558156758]]
 				}
 			}
 
+			function smritiToggle() {
+				console.log("[smriti-eye] tapped, watching=" + smritiEyeUi.watching);
+				var xhr = new XMLHttpRequest();
+				xhr.open("PUT", "file:///home/root/.smriti/eye-cmd");
+				xhr.send(smritiEyeUi.watching ? "stop" : "start");
+				smritiEyeUi.watching = !smritiEyeUi.watching;
+			}
+
+			TapHandler {
+				onTapped: smritiEyeUi.smritiToggle()
+			}
 			MouseArea {
 				anchors.fill: parent
-				onClicked: {
-					var xhr = new XMLHttpRequest();
-					xhr.open("PUT", "file:///home/root/.smriti/eye-cmd");
-					xhr.send(smritiEyeUi.watching ? "stop" : "start");
-					smritiEyeUi.watching = !smritiEyeUi.watching;
-				}
+				onClicked: smritiEyeUi.smritiToggle()
 			}
 		}
 		}

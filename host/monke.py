@@ -33,8 +33,8 @@ import subprocess
 import time
 import tomllib
 
-from capture import (Capture, StrokeBuilder, render_strokes, screenshot,
-                     ink_floor, free_bands, CANVAS_W, CANVAS_H)
+from capture import Capture, StrokeBuilder, render_strokes, CANVAS_W, CANVAS_H
+from screen import screenshot, ink_floor, free_bands
 from ink import load_styles, render
 from oracle import chat, image_msg
 from write import to_lamp
@@ -275,6 +275,7 @@ def run() -> None:
     max_turns = m.get("history_turns", 6)
     fade = m.get("fade", False)
     fade_hold = m.get("fade_hold", 10)
+    greet_fade = m.get("greet_fade", True)   # erase greeting once answered
     global MARKER_INK
     MARKER_INK = m.get("marker_ink", False)
 
@@ -289,6 +290,7 @@ def run() -> None:
     _control_server(ctl, state, cfg.get("control", {}).get("port", 7333))
     history: list[dict] = []
     strokes: list[list[tuple[int, int]]] = []
+    greet_ink: list = []      # greeting strokes, erased at first reply/stop
     # ink floor = lowest y known to hold ink. Primary source: a REAL
     # screenshot (goMarkableStream /screenshot) of the visible page,
     # taken when a session starts; fallback: floor persisted last run.
@@ -326,7 +328,8 @@ def run() -> None:
                     print(f"session start — ink floor {floor}"
                           + (" (screenshot)" if sf is not None else " (persisted)"),
                           flush=True)
-                    floor = _greet(style, step, bottom, host, history, floor)
+                    floor, greet_ink = _greet(style, step, bottom, host,
+                                              history, floor)
                     _save_floor(floor)
                     pen, sb = Capture(host), StrokeBuilder()
                     paused, strokes = False, []
@@ -335,6 +338,9 @@ def run() -> None:
                     _drain(pen.q, touch.q)
                     print("watching", flush=True)
                 elif g in ("hold", "stop") and not paused:
+                    if greet_fade and greet_ink:
+                        erase_box(greet_ink, host)
+                        greet_ink = []
                     paused, strokes = True, []
                     state["watching"] = False
                     if pen is not None:
@@ -352,7 +358,9 @@ def run() -> None:
             if (not paused and pen is not None and strokes and not sb.touching
                     and time.time() - last_pen >= idle):
                 floor = _reply(strokes, style, step, bottom, host, history, floor,
-                               fade, fade_hold)
+                               fade, fade_hold,
+                               greet=greet_ink if greet_fade else None)
+                greet_ink = []
                 _save_floor(floor)
                 del history[:-2 * max_turns]
                 strokes = []
@@ -419,10 +427,11 @@ def _place(text: str, style, y: int, shot, bottom: int) -> list | None:
     return None
 
 
-def _greet(style, step, bottom, host, history, floor) -> int:
+def _greet(style, step, bottom, host, history, floor) -> tuple[int, list]:
     """Session-start greeting: one chat call with the scanned page as
-    context, short Monke line inked below the existing ink. Returns the
-    new floor."""
+    context, short Monke line inked below the existing ink. Returns
+    (new floor, greeting strokes) — the strokes get erased later when
+    greet_fade is on."""
     marker("busy", host)
     png, shot = _page_context([])
     user = image_msg(png, "Navy just tapped the eye: a diary session starts "
@@ -432,7 +441,7 @@ def _greet(style, step, bottom, host, history, floor) -> int:
         text = chat([{"role": "system", "content": MONKE_SYSTEM}] + history + [user])
     except Exception as e:
         print(f"[greet] AI unreachable: {str(e)[:120]}", flush=True)
-        return floor
+        return floor, []
     text = text.encode("ascii", "ignore").decode().strip()
     history += [user, {"role": "assistant", "content": text}]
     print(f"monke greets: {text}", flush=True)
@@ -440,13 +449,13 @@ def _greet(style, step, bottom, host, history, floor) -> int:
     reply = _place(text, style, min(y, bottom - 100), shot, bottom)
     if not reply:
         print("no room for greeting — page full, greeting in log only", flush=True)
-        return floor
+        return floor, []
     lamp(to_lamp(reply, style.get("pressure", 2400), step), host)
-    return max(floor, max(py for s in reply for _, py in s))
+    return max(floor, max(py for s in reply for _, py in s)), reply
 
 
 def _reply(strokes, style, step, bottom, host, history, floor,
-           fade=False, fade_hold=10) -> int:
+           fade=False, fade_hold=10, greet=None) -> int:
     """Returns the new ink floor (max y written this session)."""
     marker("busy", host)
     print(f"page committed ({len(strokes)} strokes) -> asking monke…", flush=True)
@@ -457,6 +466,9 @@ def _reply(strokes, style, step, bottom, host, history, floor,
     text = text.encode("ascii", "ignore").decode().strip()
     history += [user, {"role": "assistant", "content": text}]
     print(f"monke ({time.time() - t0:.1f}s): {text}", flush=True)
+    if greet:
+        # the greeting served its purpose — fade it before the answer lands
+        erase_box(greet, host)
 
     # ponytail: fade/riddle mode DISABLED pending visual verification on
     # device — erase sweep width/completeness unconfirmed. Re-enable by

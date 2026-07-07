@@ -68,22 +68,25 @@ def load_ai_config() -> dict:
         cfg["model"] = m
     if (k := os.environ.get("SMRITI_AI_KEY")):
         cfg["api_key"] = k
-    if "ai_fallback" in full:
-        cfg["_fallback"] = _resolve(full["ai_fallback"])
+    # [[ai_fallback]] array = ordered chain; a single [ai_fallback] table
+    # (older configs) still works
+    fb = full.get("ai_fallback", [])
+    cfg["_fallback"] = [_resolve(f) for f in
+                        (fb if isinstance(fb, list) else [fb])]
     return cfg
 
 
 def chat(messages: list[dict], cfg: dict | None = None) -> str:
     cfg = cfg or load_ai_config()
-    fb = cfg.get("_fallback")
-    if fb:
+    last = None
+    for c in [cfg] + cfg.get("_fallback", []):
         try:
-            return _chat(messages, cfg)
+            return _chat(messages, c)
         except Exception as e:
-            print(f"[oracle] primary failed ({e}) -> fallback {fb['model']}",
+            print(f"[oracle] {c.get('model', '?')} failed ({str(e)[:150]})",
                   flush=True)
-            return _chat(messages, fb)
-    return _chat(messages, cfg)
+            last = e
+    raise last
 
 
 def _chat(messages: list[dict], cfg: dict) -> str:
