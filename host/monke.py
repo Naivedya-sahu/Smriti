@@ -30,7 +30,8 @@ import subprocess
 import time
 import tomllib
 
-from capture import Capture, StrokeBuilder, render_strokes, CANVAS_W, CANVAS_H
+from capture import (Capture, StrokeBuilder, render_strokes, screenshot,
+                     ink_floor, CANVAS_W, CANVAS_H)
 from ink import load_styles, render
 from oracle import chat, image_msg
 from write import to_lamp
@@ -56,6 +57,8 @@ Rules:
 - Maths and circuits ARE allowed and encouraged when they help: wrap LaTeX in
   $$...$$ (amsmath). Circuits: $$\\begin{circuitikz}...\\end{circuitikz}$$.
   These are typeset properly on the page. Keep prose outside the $$.
+- Inside circuitikz, labels MUST be in math mode: to[R, l=$R_1$],
+  to[R, l=$4\\Omega$], v=$12\\,V$ — bare \\Omega outside $ $ fails to compile.
 - If the page is unreadable, say so in Monke voice, short."""
 
 MARKER_X, MARKER_Y = 1352, 1826
@@ -153,6 +156,18 @@ class TouchGesture:
         return None
 
 
+def _screen_floor(cfg=None) -> int | None:
+    """Occupied-ink floor from the actual visible screen, or None if the
+    goMarkableStream service is unreachable."""
+    if cfg is None:
+        with open(REPO_CFG, "rb") as f:
+            cfg = tomllib.load(f)
+    s = cfg.get("screen", {})
+    img = screenshot(s.get("url", "https://10.11.99.1:2001"),
+                     s.get("user", "admin"), s.get("password", "password"))
+    return ink_floor(img) if img is not None else None
+
+
 _FLOOR_FILE = __import__("pathlib").Path.home() / ".config" / "smriti" / "floor"
 
 
@@ -205,11 +220,14 @@ def run() -> None:
     tg = TouchGesture()
     history: list[dict] = []
     strokes: list[list[tuple[int, int]]] = []
-    # ink floor = lowest y known to hold ink (inputs + replies). Persisted so
-    # a daemon restart on the same page won't overwrite; finger page-swipes
-    # reset it. ponytail: blind to ink written while the daemon is off — the
-    # honest fix is a real screen grab (goMarkableStream frame), v0.2.
-    floor = _load_floor()
+    # ink floor = lowest y known to hold ink. Primary source: a REAL
+    # screenshot (goMarkableStream /screenshot) of the visible page;
+    # fallback: floor persisted from the previous run.
+    sf = _screen_floor(cfg)
+    floor = sf if sf is not None else _load_floor()
+    print(f"ink floor: {floor}"
+          + (" (from screenshot)" if sf is not None else " (persisted)"),
+          flush=True)
     paused = False
     last_pen = 0.0
     marker("watch", host)
@@ -235,9 +253,11 @@ def run() -> None:
                     marker("pause" if paused else "watch", host)
                     _drain(pen.q, touch.q)
                 elif g == "pageturn":
-                    floor = 0
-                    _save_floor(0)
-                    print("page turned — floor reset", flush=True)
+                    time.sleep(1.0)          # let xochitl repaint
+                    sf = _screen_floor(cfg)
+                    floor = sf if sf is not None else 0
+                    _save_floor(floor)
+                    print(f"page turned — floor {floor}", flush=True)
             if (not paused and strokes and not sb.touching
                     and time.time() - last_pen >= idle):
                 floor = _reply(strokes, style, step, bottom, host, history, floor,
@@ -293,11 +313,23 @@ def _reply(strokes, style, step, bottom, host, history, floor,
     y = max(floor, max(py for s in strokes for _, py in s)) + 50
     reply = _layout(text, style, y)
     if reply and max(py for s in reply for _, py in s) > bottom:
-        # won't fit — turn the page (injected finger swipe), restart at top
-        lamp("swipe left\n", host)
-        time.sleep(1.0)
-        reply = _layout(text, style, 150)
-        floor = 0
+        # won't fit — turn pages (injected finger swipe) until one has room;
+        # each landing checked with a REAL screenshot, never assumed blank
+        for _ in range(3):
+            lamp("swipe left\n", host)
+            time.sleep(1.2)
+            sf = _screen_floor() or 0
+            if sf + 100 < bottom:
+                break
+        else:
+            # every reachable page is full (injected swipes can't CREATE
+            # pages — only a real finger swipe on the last page can).
+            # Don't ink into the void; the reply is in the log.
+            print("NO ROOM on any page — reply not inked. Turn to a fresh "
+                  "page by hand.", flush=True)
+            return floor
+        floor = sf
+        reply = _layout(text, style, max(150, sf + 50))
     lamp(to_lamp(reply, style.get("pressure", 2400), step), host)
     return max(floor, max((py for s in reply for _, py in s), default=floor))
 
@@ -317,8 +349,11 @@ def _layout(text: str, style, y: int) -> list:
                 body = part if "\\begin" in part else f"${part}$"
                 seg = tex_to_strokes(body, x=100, y=y + 20, max_w=1200)
             except Exception as e:
-                print(f"[tex] render failed ({e}) -> writing raw", flush=True)
-                seg = render(part, style, x=100, y=y)
+                print(f"[tex] render failed: {str(e)[:200]}", flush=True)
+                # raw circuit code inked on paper = noise; short note instead
+                fb = part if len(part) < 80 and "\\begin" not in part \
+                    else "(monke drew a bad diagram - see log)"
+                seg = render(fb, style, x=100, y=y)
         else:
             seg = render(part, style, x=100, y=y)
         if seg:

@@ -23,6 +23,7 @@ import threading
 import time
 from pathlib import Path
 
+import numpy as np
 from PIL import Image, ImageDraw
 
 # armv7 input_event: u32 sec, u32 usec, u16 type, u16 code, s32 value
@@ -118,6 +119,40 @@ def render_strokes(strokes: list[list[tuple[int, int]]],
 
 def strokes_to_png(strokes: list[list[tuple[int, int]]], out: Path) -> None:
     render_strokes(strokes).save(out)
+
+
+def screenshot(url: str = "https://10.11.99.1:2001",
+               user: str = "admin", password: str = "password"
+               ) -> Image.Image | None:
+    """Actual visible screen via goMarkableStream's /screenshot (JWT login).
+    Returns grayscale PIL image, or None if the service is unreachable."""
+    import io
+    import json
+    import ssl
+    import urllib.request
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE      # gms uses a self-signed cert
+    try:
+        body = json.dumps({"username": user, "password": password}).encode()
+        req = urllib.request.Request(url + "/login", data=body,
+                                     headers={"Content-Type": "application/json"})
+        tok = json.load(urllib.request.urlopen(req, context=ctx, timeout=10))["token"]
+        req = urllib.request.Request(url + "/screenshot",
+                                     headers={"Authorization": f"Bearer {tok}"})
+        data = urllib.request.urlopen(req, context=ctx, timeout=30).read()
+        return Image.open(io.BytesIO(data)).convert("L")
+    except Exception:
+        return None
+
+
+def ink_floor(img: Image.Image, min_dark_px: int = 80) -> int:
+    """Lowest page y that holds ink, from a real screenshot. Template dots
+    are sparse (~35 dark px/row); real ink rows are dense — threshold splits
+    them. Returns 0 for a blank page."""
+    a = np.asarray(img.resize((CANVAS_W, CANVAS_H))) < 100
+    rows = np.nonzero(a.sum(axis=1) >= min_dark_px)[0]
+    return int(rows[-1]) if len(rows) else 0
 
 
 def run(host: str, idle: float, out: str, watch: bool, min_strokes: int) -> None:

@@ -38,3 +38,8 @@ fade = false                # riddle mode — CURRENTLY DISABLED in code (visual
                             # verify pending; see monke.py _reply). ERASES ink.
 fade_hold = 8               # seconds the reply stays readable before fading
 history_turns = 6           # conversation memory (page images + replies kept)
+
+[screen]
+url = "https://10.11.99.1:2001"   # goMarkableStream on the tablet
+user = "admin"
+password = "password"
