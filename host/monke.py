@@ -60,11 +60,17 @@ Rules:
 - Max 35 words of prose. No greetings, no sign-off.
 - Plain ASCII only (a-z, 0-9, . , ! ? ' -). No emoji, no markdown, no unicode
   — your reply is redrawn as handwriting by an ASCII-only stroke font.
-- Maths and circuits ARE allowed and encouraged when they help: wrap LaTeX in
-  $$...$$ (amsmath). Circuits: $$\\begin{circuitikz}...\\end{circuitikz}$$.
-  These are typeset properly on the page. Keep prose outside the $$.
-- Inside circuitikz, labels MUST be in math mode: to[R, l=$R_1$],
-  to[R, l=$4\\Omega$], v=$12\\,V$ — bare \\Omega outside $ $ fails to compile.
+- YOUR REPLY IS RENDERED ON PAPER. Prose becomes handwriting. Everything
+  between $$...$$ is compiled by real LaTeX (amsmath) and drawn as a
+  typeset preview. The reader must NEVER see LaTeX source: no \\frac, no
+  \\omega, no ^ or _ notation in the prose itself — ALL maths, every
+  formula, every symbol, goes inside $$...$$.
+- Circuits and simple diagrams are encouraged:
+  $$\\begin{circuitikz}...\\end{circuitikz}$$ (a plain tikzpicture is also
+  fine for non-circuit diagrams). Inside circuitikz, labels MUST be in math
+  mode: to[R, l=$R_1$], to[R, l=$4\\Omega$], v=$12\\,V$ — bare \\Omega
+  outside $ $ fails to compile and the drawing is lost.
+- One $$...$$ block per equation or drawing; prose stays outside.
 - If the page is unreadable, say so in Monke voice, short."""
 
 MARKER_X, MARKER_Y = 1352, 1826
@@ -221,10 +227,17 @@ def _pull(q: queue.Queue) -> list:
         return evs
 
 
-def _drain(*qs: queue.Queue) -> None:
-    time.sleep(0.6)
-    for q in qs:
-        _pull(q)
+def _drain(*qs: queue.Queue, quiet: float = 1.2, cap: float = 15.0) -> None:
+    """Discard our own ink echo from the event queues. The echo of a long
+    reply keeps trickling over the ssh stream well past any fixed sleep —
+    that leftover used to be committed as 'user input' and Monke answered
+    itself. So: drain until the streams stay quiet for `quiet` seconds
+    (bounded by `cap`)."""
+    t0 = last = time.time()
+    while time.time() - last < quiet and time.time() - t0 < cap:
+        time.sleep(0.2)
+        if any(len(_pull(q)) for q in qs):
+            last = time.time()
 
 
 def _control_server(ctl: queue.Queue, state: dict, port: int = 7333) -> None:
@@ -461,7 +474,10 @@ def _reply(strokes, style, step, bottom, host, history, floor,
     print(f"page committed ({len(strokes)} strokes) -> asking monke…", flush=True)
     t0 = time.time()
     png, shot = _page_context(strokes)
-    user = image_msg(png, "The red strokes are Navy's newest writing. Reply.")
+    user = image_msg(png, "The red strokes are Navy's newest writing. Reply. "
+                          "Maths/circuits only inside $$...$$ — they are "
+                          "typeset onto the paper; never show LaTeX source "
+                          "in prose.")
     text = chat([{"role": "system", "content": MONKE_SYSTEM}] + history + [user])
     text = text.encode("ascii", "ignore").decode().strip()
     history += [user, {"role": "assistant", "content": text}]
@@ -515,12 +531,23 @@ def _layout(text: str, style, y: int) -> list:
     """Reply → strokes. Prose via the stroke font; $$...$$ blocks typeset
     through LaTeX (maths/circuitikz) and stacked between the prose."""
     import re
-    out = []
+    segs: list[tuple[bool, str]] = []
     for i, part in enumerate(re.split(r"\$\$(.+?)\$\$", text, flags=re.S)):
+        if i % 2:
+            segs.append((True, part))
+        else:
+            # model slip-up guard: single-$ inline math in prose would be
+            # inked as raw code by the stroke font — typeset it instead.
+            # (only prose is scanned, so inner $ in circuitikz labels is safe)
+            for j, sub in enumerate(
+                    re.split(r"(?<!\$)\$(?!\$)([^$\n]+?)\$(?!\$)", part)):
+                segs.append((j % 2 == 1, sub))
+    out = []
+    for is_tex, part in segs:
         part = part.strip()
         if not part:
             continue
-        if i % 2:  # tex block
+        if is_tex:  # tex block
             try:
                 from tex import tex_to_strokes
                 body = part if "\\begin" in part else f"${part}$"
