@@ -147,8 +147,26 @@ def svg_to_strokes(svg: str, x: int = 100, y: int = 100,
     ys = [py for s in raw for _, py in s]
     w, h = max(xs) - min(xs) or 1.0, max(ys) - min(ys) or 1.0
     scale = min(max_w / w, max_h / h, 4.0)     # cap: tiny svgs shouldn't blow up
-    return [[(int(x + (px - min(xs)) * scale), int(y + (py - min(ys)) * scale))
-             for px, py in s] for s in raw]
+    scaled = [[(int(x + (px - min(xs)) * scale), int(y + (py - min(ys)) * scale))
+               for px, py in s] for s in raw]
+    # densify: a rect/polygon is only a few waypoints, and the downstream
+    # lamp decimation (every Nth point) would delete whole edges. Resample
+    # each segment to ~4px so no edge can be dropped and lines stay solid.
+    return [_densify(s, 4) for s in scaled]
+
+
+def _densify(stroke: list, d: int = 4) -> list:
+    """Resample a polyline so consecutive points are <= d px apart, keeping
+    every original vertex. Survives waypoint decimation without losing edges."""
+    if len(stroke) < 2:
+        return stroke
+    out = [stroke[0]]
+    for (x0, y0), (x1, y1) in zip(stroke, stroke[1:]):
+        n = max(1, int(math.hypot(x1 - x0, y1 - y0) // d))
+        for i in range(1, n + 1):
+            t = i / n
+            out.append((int(x0 + (x1 - x0) * t), int(y0 + (y1 - y0) * t)))
+    return out
 
 
 def selfcheck() -> None:
@@ -166,8 +184,15 @@ def selfcheck() -> None:
     assert min(xs) >= 100 and min(ys) >= 100, "offset wrong"
     assert max(xs) <= 100 + 600, "scale overflow"
     assert len(s[3]) > 20, "curves not flattened"
-    print(f"svg selfcheck ok: {len(s)} strokes, "
-          f"bbox {min(xs)},{min(ys)} - {max(xs)},{max(ys)}")
+    # rect must survive decimation: densified so every edge keeps points
+    rect = s[0]
+    assert len(rect) > 40, f"rect not densified ({len(rect)} pts) — edges would drop"
+    dec = rect[::3]        # simulate lamp decimation
+    xr = [p[0] for p in dec]; yr = [p[1] for p in dec]
+    assert max(xr) - min(xr) > 50 and max(yr) - min(yr) > 30, \
+        "rect collapsed under decimation — edges missing"
+    print(f"svg selfcheck ok: {len(s)} strokes, rect {len(rect)} pts survives "
+          f"decimation, bbox {min(xs)},{min(ys)} - {max(xs)},{max(ys)}")
 
 
 if __name__ == "__main__":

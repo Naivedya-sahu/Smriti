@@ -55,6 +55,14 @@ soon. You help with: journaling, study, projects, habits, ideas.
 This is an ongoing conversation: earlier pages and your replies may precede
 the latest photo. Stay consistent with what was already said.
 
+The page is a reMarkable 2 screen: 1404 x 1872 pixels (portrait, ~226 dpi,
+dotted grid). Your reply is placed AUTOMATICALLY into empty space on the
+page — you never set coordinates. But space is finite: each prose line is
+~90px tall and a typeset equation or a drawing is ~150-350px. You are told
+before each reply roughly how much vertical room is left; keep the whole
+reply within it so nothing is dropped. When room is tight, be terse and
+prefer one equation or one small drawing over several.
+
 Rules:
 - Reply to the CONTENT of the handwriting, like a sharp friend in the margins.
 - Max 35 words of prose. No greetings, no sign-off.
@@ -522,10 +530,19 @@ def _reply(strokes, style, step, bottom, host, history, floor,
     print(f"page committed ({len(strokes)} strokes) -> asking monke…", flush=True)
     t0 = time.time()
     png, shot = _page_context(strokes, shot)
+    # tell the model how much room its reply has, from the real page
+    avail = 1872
+    if shot is not None:
+        bands = free_bands(shot)
+        avail = max((y1 - y0 for y0, y1 in bands), default=200)
+    room = (f"About {avail}px of empty vertical space is left on the page "
+            f"(~{max(1, avail // 90)} handwritten lines). Keep the whole reply "
+            f"within it. ")
     user = image_msg(png, "The red strokes are Navy's newest writing. Reply. "
-                          "Maths/circuits only inside $$...$$ — they are "
-                          "typeset onto the paper; never show LaTeX source "
-                          "in prose.")
+                          + room +
+                          "Maths/circuits only inside $$...$$ (typeset onto "
+                          "the paper, never show LaTeX source in prose); "
+                          "freeform sketches as one <svg> block.")
     text = chat([{"role": "system", "content": MONKE_SYSTEM}] + history + [user])
     text = text.encode("ascii", "ignore").decode().strip()
     history += [user, {"role": "assistant", "content": text}]
