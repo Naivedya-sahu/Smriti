@@ -42,15 +42,20 @@ def _flat_quad(p0: Pt, p1: Pt, p2: Pt, n: int = 12) -> list[Pt]:
 
 
 def _path_strokes(d: str) -> list[list[Pt]]:
-    tok = re.findall(r"[MmLlHhVvCcQqZz]|-?\d*\.?\d+(?:e-?\d+)?", d)
+    # every path command letter must be tokenized, else its coords get
+    # swallowed by the previous command's implicit-repeat and over-read
+    tok = re.findall(r"[MmLlHhVvCcSsQqTtAaZz]|-?\d*\.?\d+(?:e-?\d+)?", d)
     strokes: list[list[Pt]] = []
     cur: list[Pt] = []
     x = y = sx = sy = 0.0
+    pcx = pcy = None          # previous cubic/quad control point (for S/T)
     i, cmd = 0, ""
 
     def take(n):
+        """Bounds-safe: a malformed/truncated path returns 0s instead of
+        crashing — a slightly-wrong drawing beats killing the whole reply."""
         nonlocal i
-        vals = [float(tok[i + k]) for k in range(n)]
+        vals = [float(tok[i + k]) if i + k < len(tok) else 0.0 for k in range(n)]
         i += n
         return vals
 
@@ -58,43 +63,64 @@ def _path_strokes(d: str) -> list[list[Pt]]:
         if re.match(r"[A-Za-z]", tok[i]):
             cmd = tok[i]
             i += 1
+        rel = cmd.islower()
         if cmd in "Mm":
             dx, dy = take(2)
-            if cmd == "m":
+            if rel:
                 dx, dy = x + dx, y + dy
             if len(cur) > 1:
                 strokes.append(cur)
             x, y = sx, sy = dx, dy
             cur = [(x, y)]
-            cmd = "L" if cmd == "M" else "l"   # subsequent pairs are lineto
+            pcx = pcy = None
+            cmd = "l" if rel else "L"           # subsequent pairs are lineto
         elif cmd in "Ll":
             dx, dy = take(2)
-            x, y = (x + dx, y + dy) if cmd == "l" else (dx, dy)
-            cur.append((x, y))
+            x, y = (x + dx, y + dy) if rel else (dx, dy)
+            cur.append((x, y)); pcx = pcy = None
         elif cmd in "Hh":
             (dx,) = take(1)
-            x = x + dx if cmd == "h" else dx
-            cur.append((x, y))
+            x = x + dx if rel else dx
+            cur.append((x, y)); pcx = pcy = None
         elif cmd in "Vv":
             (dy,) = take(1)
-            y = y + dy if cmd == "v" else dy
-            cur.append((x, y))
-        elif cmd in "Cc":
-            v = take(6)
-            if cmd == "c":
-                v = [v[0] + x, v[1] + y, v[2] + x, v[3] + y, v[4] + x, v[5] + y]
-            cur += _flat_cubic((x, y), (v[0], v[1]), (v[2], v[3]), (v[4], v[5]))
-            x, y = v[4], v[5]
-        elif cmd in "Qq":
-            v = take(4)
-            if cmd == "q":
-                v = [v[0] + x, v[1] + y, v[2] + x, v[3] + y]
-            cur += _flat_quad((x, y), (v[0], v[1]), (v[2], v[3]))
-            x, y = v[2], v[3]
+            y = y + dy if rel else dy
+            cur.append((x, y)); pcx = pcy = None
+        elif cmd in "CcSs":
+            if cmd in "Cc":
+                v = take(6)
+                if rel:
+                    v = [v[0]+x, v[1]+y, v[2]+x, v[3]+y, v[4]+x, v[5]+y]
+                c1, c2, end = (v[0], v[1]), (v[2], v[3]), (v[4], v[5])
+            else:                               # S/s: reflect prev control
+                v = take(4)
+                if rel:
+                    v = [v[0]+x, v[1]+y, v[2]+x, v[3]+y]
+                c1 = (2*x - pcx, 2*y - pcy) if pcx is not None else (x, y)
+                c2, end = (v[0], v[1]), (v[2], v[3])
+            cur += _flat_cubic((x, y), c1, c2, end)
+            pcx, pcy = c2; x, y = end
+        elif cmd in "QqTt":
+            if cmd in "Qq":
+                v = take(4)
+                if rel:
+                    v = [v[0]+x, v[1]+y, v[2]+x, v[3]+y]
+                ctrl, end = (v[0], v[1]), (v[2], v[3])
+            else:                               # T/t: reflect prev control
+                v = take(2)
+                if rel:
+                    v = [v[0]+x, v[1]+y]
+                ctrl = (2*x - pcx, 2*y - pcy) if pcx is not None else (x, y)
+                end = (v[0], v[1])
+            cur += _flat_quad((x, y), ctrl, end)
+            pcx, pcy = ctrl; x, y = end
+        elif cmd in "Aa":                       # arc: approximate as line to end
+            v = take(7)
+            end = (x + v[5], y + v[6]) if rel else (v[5], v[6])
+            cur.append(end); x, y = end; pcx = pcy = None
         elif cmd in "Zz":
-            cur.append((sx, sy))
-            x, y = sx, sy
-        else:                                  # unsupported command: skip token
+            cur.append((sx, sy)); x, y = sx, sy; pcx = pcy = None
+        else:                                   # unknown token: skip it
             i += 1
     if len(cur) > 1:
         strokes.append(cur)
@@ -191,8 +217,15 @@ def selfcheck() -> None:
     xr = [p[0] for p in dec]; yr = [p[1] for p in dec]
     assert max(xr) - min(xr) > 50 and max(yr) - min(yr) > 30, \
         "rect collapsed under decimation — edges missing"
+    # smooth-curve path (T/S) must not crash — real AI Bode-plot output
+    bode = svg_to_strokes('<svg viewBox="0 0 400 300"><polyline points="50,250 350,250"/>'
+                          '<path d="M 50,70 Q 150,70 150,150 T 350,230"/></svg>')
+    assert len(bode) == 2 and len(bode[1]) > 20, f"smooth path broke: {bode}"
+    # truncated path must return, not raise
+    assert svg_to_strokes('<svg viewBox="0 0 10 10"><path d="M0 0 C 1 1 2"/></svg>') is not None
     print(f"svg selfcheck ok: {len(s)} strokes, rect {len(rect)} pts survives "
-          f"decimation, bbox {min(xs)},{min(ys)} - {max(xs)},{max(ys)}")
+          f"decimation, T/S paths + truncated paths safe, "
+          f"bbox {min(xs)},{min(ys)} - {max(xs)},{max(ys)}")
 
 
 if __name__ == "__main__":

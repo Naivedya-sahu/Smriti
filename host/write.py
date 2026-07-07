@@ -35,7 +35,7 @@ def main() -> None:
     ap.add_argument("text")
     ap.add_argument("--style", default="cursive")
     ap.add_argument("--rm2", default="rm2", help="ssh host alias")
-    ap.add_argument("--lamp", default="/home/root/lamp")
+    ap.add_argument("--lamp", default="/home/root/.vellum/bin/lamp")
     ap.add_argument("--x", type=int, default=100)
     ap.add_argument("--y", type=int, default=150)
     ap.add_argument("--step", type=int, default=3)
