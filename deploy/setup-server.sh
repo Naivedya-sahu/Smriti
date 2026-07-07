@@ -24,6 +24,18 @@ cd "$DIR"
 uv sync
 PYTHONUTF8=1 uv run python host/ink.py selfcheck
 
+echo "== LaTeX (maths + circuit rendering)"
+# monke renders $$...$$ replies through pdflatex; without it those degrade
+# to a short note. Skip if you don't need maths/circuits (SMRITI_NO_TEX=1).
+if [ "${SMRITI_NO_TEX:-0}" != "1" ] && ! command -v pdflatex >/dev/null 2>&1 \
+        && [ ! -x "$(echo "$HOME"/.TinyTeX/bin/*/pdflatex 2>/dev/null)" ]; then
+    echo "   installing TinyTeX (user-space, no root)…"
+    curl -sL https://yihui.org/tinytex/install-bin-unix.sh | sh >/dev/null 2>&1 || \
+        echo "   !! TinyTeX install failed — maths/circuits will degrade to notes"
+    "$HOME"/.TinyTeX/bin/*/tlmgr install standalone preview circuitikz pgf \
+        xcolor amsmath amsfonts >/dev/null 2>&1 || true
+fi
+
 echo "== ssh key for the tablet"
 if [ ! -f "$HOME/.ssh/id_ed25519_rm2" ]; then
     mkdir -p "$HOME/.ssh"; chmod 700 "$HOME/.ssh"

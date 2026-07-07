@@ -1,5 +1,22 @@
 # Changelog
 
+## v0.1.7 — fonts, sizing, on-device maths (2026-07-08)
+- **Custom fonts**: drop any ttf/otf in `fonts/`, add a `[style.<name>]`
+  block — documented recipe in styles.toml. Ships `cartoon` (Comic Neue,
+  OFL). `[monke] reply_size` / `reply_line_height` override size + spacing
+  per config, no style edit. `write.py --out preview.png` renders any style
+  without a tablet.
+- **input_fade**: the user's question is erased with the greeting when the
+  answer lands, so the reply reuses that space.
+- **pdflatex resolution fixed**: tex.py finds pdflatex via SMRITI_PDFLATEX,
+  PATH, or user-space `~/.TinyTeX`. The Pi daemon (systemd, no login PATH)
+  couldn't see pdflatex before — that was the real cause of circuits
+  degrading to "see log", not the AI model. setup-server.sh now installs
+  TinyTeX + circuitikz automatically (SMRITI_NO_TEX=1 to skip).
+- Verified on-device from the system alone (no AI): Comic Neue font at a
+  custom size, a typeset equation, and a full series-RLC circuitikz
+  drawing all inked cleanly.
+
 ## v0.1.6 — floating eye + diff guard + SVG (2026-07-07)
 - **Floating in-notebook eye** (xovi qmldiff patch): drawn UI bottom-right
   of every notebook page — dash=idle, pupil=watching, tap toggles the

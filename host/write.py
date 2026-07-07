@@ -39,10 +39,17 @@ def main() -> None:
     ap.add_argument("--x", type=int, default=100)
     ap.add_argument("--y", type=int, default=150)
     ap.add_argument("--step", type=int, default=3)
+    ap.add_argument("--out", help="render to a PNG instead of inking on the "
+                                  "tablet — preview a font/size without a device")
     a = ap.parse_args()
     style = load_styles()[a.style]
-    cmds = to_lamp(render(a.text, style, a.x, a.y),
-                   style.get("pressure", 2400), a.step)
+    strokes = render(a.text, style, a.x, a.y)
+    if a.out:
+        from capture import render_strokes
+        render_strokes(strokes, crop=True).save(a.out)
+        print(a.out)
+        return
+    cmds = to_lamp(strokes, style.get("pressure", 2400), a.step)
     subprocess.run(["ssh", a.rm2, a.lamp], input=cmds.encode("ascii"), check=True)
     print(f"sent {cmds.count(chr(10))} commands")
 

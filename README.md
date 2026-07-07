@@ -165,6 +165,9 @@ The script prints a 5-step checklist; the only manual parts are pasting the
 generated pubkey into the tablet's `authorized_keys` and making `ssh rm2`
 resolve on YOUR network (USB `10.11.99.1`, LAN IP, or tailscale —
 `vellum add tailscale` exists on the tablet; note: userspace networking).
+It also installs **TinyTeX** (user-space, no root) so `$$…$$` maths and
+circuits render — set `SMRITI_NO_TEX=1` to skip, or point
+`SMRITI_PDFLATEX` at an existing pdflatex.
 
 ```sh
 sudo systemctl enable --now smriti-monke@$USER    # always-on daemon
@@ -198,6 +201,25 @@ with no port forwarding.
 **Hermes seam:** the same `[ai]` block is the backend toggle — when a Hermes
 agent (memory/KB spine on the Pi) exposes an OpenAI-compatible endpoint,
 point `base_url` at it and Monke routes through Hermes. No code change.
+
+> Maths/circuits are the **renderer's** job, not the model's: any capable
+> model (Gemini flash included) emits `$$…$$`; the daemon typesets it with
+> LaTeX. If circuits come out as "see log", pdflatex is missing on the
+> *server* (see §3 TinyTeX) — not a model limitation.
+
+## Fonts, sizing & spacing
+
+Replies are drawn with a stroke-traced TTF/OTF font. Add your own: drop the
+file in `fonts/`, add a `[style.<name>]` block in
+[styles.toml](styles.toml) (knobs: `size`, `line_height`, `wght`, `slant`,
+`pressure`), then set `reply_style = "<name>"` in `config.toml`. `cursive`,
+`print`, `cursive-bold` and `cartoon` (Comic Neue) ship in the repo.
+`[monke] reply_size` / `reply_line_height` override size and spacing without
+touching styles.toml. Preview any style without the tablet:
+`uv run python host/write.py "text" --style <name>` (add `--out preview.png`).
+
+**Fading:** `greet_fade` erases the greeting when the first answer lands;
+`input_fade` also erases your question so the answer reuses that space.
 
 ## Testing each layer
 
