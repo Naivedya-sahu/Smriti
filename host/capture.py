@@ -46,8 +46,13 @@ def to_screen(ax: int, ay: int) -> tuple[int, int]:
 
 class Capture:
     def __init__(self, host: str = "rm2", device: str = "/dev/input/event1"):
+        self.host, self.device = host, device
+        # keepalive: an idle evdev stream sends no bytes, and ssh/tailscale
+        # reap a silent connection (~180s) — probes keep it open so the
+        # daemon doesn't lose the stream just because nobody wrote for a bit
         self.proc = subprocess.Popen(
-            ["ssh", host, f"cat {device}"],
+            ["ssh", "-o", "ServerAliveInterval=20", "-o", "ServerAliveCountMax=3",
+             host, f"cat {device}"],
             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
         self.q: queue.Queue[tuple] = queue.Queue()
         threading.Thread(target=self._pump, daemon=True).start()

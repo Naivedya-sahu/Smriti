@@ -279,6 +279,7 @@ def _control_server(ctl: queue.Queue, state: dict, port: int = 7333) -> None:
         def log_message(self, *a):
             pass
 
+    http.server.ThreadingHTTPServer.allow_reuse_address = True  # survive fast restarts
     try:
         srv = http.server.ThreadingHTTPServer(("", port), H)
     except OSError as e:
@@ -344,16 +345,28 @@ def run() -> None:
             if pen is not None:
                 for ev in _pull(pen.q):
                     if ev is None:
-                        print("pen stream ended (device offline?)", flush=True)
-                        return
+                        # stream dropped (tablet slept / ssh reaped) — a
+                        # drop must NOT kill the daemon; reconnect and go on
+                        print("pen stream ended — reconnecting", flush=True)
+                        pen.close()
+                        time.sleep(2)        # backoff if tablet is offline
+                        pen, sb = Capture(host), StrokeBuilder()
+                        strokes = []
+                        break
                     last_pen = time.time()
                     if not paused and (s := sb.feed(ev)) is not None:
                         strokes.append(s)
             cmds = _pull(ctl)         # smriti-eye / curl commands
-            for ev in _pull(touch.q):
+            touch_evs = _pull(touch.q)
+            if touch_evs and touch_evs[-1] is None:
+                print("touch stream ended — reconnecting", flush=True)
+                touch.close()
+                time.sleep(2)                # backoff if tablet is offline
+                touch, tg = Capture(host, "/dev/input/event2"), TouchGesture()
+                touch_evs = touch_evs[:-1]
+            for ev in touch_evs:
                 if ev is None:
-                    print("touch stream ended (device offline?)", flush=True)
-                    return
+                    continue
                 if (g := tg.feed(ev)) is not None:
                     cmds.append(g)
             for g in cmds:
