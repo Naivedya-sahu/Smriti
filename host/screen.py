@@ -79,6 +79,50 @@ def free_bands(img: Image.Image, min_h: int = 120,
     return bands
 
 
+def looks_corrupt(img: Image.Image, frac: float = 0.04) -> bool:
+    """goMarkableStream sometimes serves a stale/offset buffer after
+    xochitl redraws: wide bands of dense noise. On a paper-white page no
+    real row is >40% dark; many such rows = garbage frame."""
+    a = np.asarray(img.resize((CANVAS_W, CANVAS_H))) < 100
+    return float((a.sum(axis=1) > CANVAS_W * 0.4).mean()) > frac
+
+
+def grab(url: str | None = None, host: str | None = None) -> Image.Image | None:
+    """screenshot() + corruption auto-heal: a corrupt frame triggers a
+    goMarkableStream restart over ssh and one regrab."""
+    import subprocess
+    import time
+    img = screenshot(url)
+    if img is not None and not looks_corrupt(img):
+        return img
+    host = host or os.environ.get("SMRITI_TABLET_HOST", "rm2")
+    print("[screen] corrupt/absent frame — restarting goMarkableStream",
+          flush=True)
+    subprocess.run(["ssh", host, "systemctl restart goMarkableStream"],
+                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    time.sleep(3)
+    img = screenshot(url)
+    if img is not None and looks_corrupt(img):
+        return None
+    return img
+
+
+def page_diff(before: Image.Image, after: Image.Image,
+              thresh: int = 60, min_px: int = 250
+              ) -> tuple[int, int, int, int] | None:
+    """Bounding box (x0, y0, x1, y1) of what changed between two
+    screenshots, or None when nothing meaningful changed. This is the
+    backfeed guard: after Smriti inks a reply the baseline is refreshed,
+    so its own ink never reads as new user input."""
+    a = np.asarray(before.resize((CANVAS_W, CANVAS_H)), dtype=np.int16)
+    b = np.asarray(after.resize((CANVAS_W, CANVAS_H)), dtype=np.int16)
+    changed = np.abs(a - b) > thresh
+    if int(changed.sum()) < min_px:
+        return None
+    ys, xs = np.nonzero(changed)
+    return int(xs.min()), int(ys.min()), int(xs.max()), int(ys.max())
+
+
 def main() -> None:
     cmd = sys.argv[1] if len(sys.argv) > 1 else ""
     img = screenshot()

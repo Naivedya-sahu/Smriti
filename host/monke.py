@@ -34,7 +34,7 @@ import time
 import tomllib
 
 from capture import Capture, StrokeBuilder, render_strokes, CANVAS_W, CANVAS_H
-from screen import screenshot, ink_floor, free_bands
+from screen import grab, ink_floor, free_bands, page_diff
 from ink import load_styles, render
 from oracle import chat, image_msg
 from write import to_lamp
@@ -65,12 +65,19 @@ Rules:
   typeset preview. The reader must NEVER see LaTeX source: no \\frac, no
   \\omega, no ^ or _ notation in the prose itself — ALL maths, every
   formula, every symbol, goes inside $$...$$.
-- Circuits and simple diagrams are encouraged:
-  $$\\begin{circuitikz}...\\end{circuitikz}$$ (a plain tikzpicture is also
-  fine for non-circuit diagrams). Inside circuitikz, labels MUST be in math
-  mode: to[R, l=$R_1$], to[R, l=$4\\Omega$], v=$12\\,V$ — bare \\Omega
-  outside $ $ fails to compile and the drawing is lost.
-- One $$...$$ block per equation or drawing; prose stays outside.
+- Circuits, block diagrams and anything mathematical: LaTeX inside $$...$$
+  — $$\\begin{circuitikz}...\\end{circuitikz}$$ for circuits, tikzpicture
+  for block diagrams. Inside circuitikz, labels MUST be in math mode:
+  to[R, l=$R_1$], to[R, l=$4\\Omega$], v=$12\\,V$ — bare \\Omega outside
+  $ $ fails to compile and the drawing is lost.
+- Freeform sketches (flowcharts, shapes, anything non-mathematical): ONE
+  inline SVG block, <svg viewBox="0 0 400 300">...</svg>, using ONLY
+  line, rect, circle, ellipse, polyline, polygon and path (M L H V C Q Z).
+  Black strokes, no fill, NO <text> elements — it is redrawn as pen
+  strokes on paper.
+- One $$...$$ or <svg> block per drawing; prose stays outside. The source
+  code of every block is logged for Navy — the page shows only the
+  rendered result.
 - If the page is unreadable, say so in Monke voice, short."""
 
 MARKER_X, MARKER_Y = 1352, 1826
@@ -188,15 +195,21 @@ class TouchGesture:
         return None
 
 
-def _screen_floor(cfg=None) -> int | None:
-    """Occupied-ink floor from the actual visible screen, or None if the
-    goMarkableStream service is unreachable."""
+def _shot(cfg=None):
+    """One healed screenshot (corrupt frames auto-restart gms), or None."""
     if cfg is None:
         with open(REPO_CFG, "rb") as f:
             cfg = tomllib.load(f)
     s = cfg.get("screen", {})
-    img = screenshot(__import__("os").environ.get("SMRITI_SCREEN_URL") or s.get("url", "https://10.11.99.1:2001"),
-                     s.get("user", "admin"), s.get("password", "password"))
+    url = (__import__("os").environ.get("SMRITI_SCREEN_URL")
+           or s.get("url", "https://10.11.99.1:2001"))
+    return grab(url, cfg.get("capture", {}).get("host", "rm2"))
+
+
+def _screen_floor(cfg=None) -> int | None:
+    """Occupied-ink floor from the actual visible screen, or None if the
+    goMarkableStream service is unreachable."""
+    img = _shot(cfg)
     return ink_floor(img) if img is not None else None
 
 
@@ -304,6 +317,9 @@ def run() -> None:
     history: list[dict] = []
     strokes: list[list[tuple[int, int]]] = []
     greet_ink: list = []      # greeting strokes, erased at first reply/stop
+    baseline = None           # screenshot taken after Smriti's last write —
+                              # commits with no visual change vs this are
+                              # our own echo, never user input
     # ink floor = lowest y known to hold ink. Primary source: a REAL
     # screenshot (goMarkableStream /screenshot) of the visible page,
     # taken when a session starts; fallback: floor persisted last run.
@@ -349,6 +365,7 @@ def run() -> None:
                     state["watching"] = True
                     marker("watch", host)
                     _drain(pen.q, touch.q)
+                    baseline = _shot(cfg)     # page WITH greeting = baseline
                     print("watching", flush=True)
                 elif g in ("hold", "stop") and not paused:
                     if greet_fade and greet_ink:
@@ -356,6 +373,7 @@ def run() -> None:
                         greet_ink = []
                     paused, strokes = True, []
                     state["watching"] = False
+                    baseline = None
                     if pen is not None:
                         pen.close()
                         pen = None
@@ -364,21 +382,33 @@ def run() -> None:
                     _drain(touch.q)
                 elif g == "pageturn" and not paused:
                     time.sleep(1.0)          # let xochitl repaint
-                    sf = _screen_floor(cfg)
-                    floor = sf if sf is not None else 0
+                    baseline = _shot(cfg)
+                    floor = ink_floor(baseline) if baseline is not None else 0
                     _save_floor(floor)
                     print(f"page turned — floor {floor}", flush=True)
             if (not paused and pen is not None and strokes and not sb.touching
                     and time.time() - last_pen >= idle):
-                floor = _reply(strokes, style, step, bottom, host, history, floor,
-                               fade, fade_hold,
-                               greet=greet_ink if greet_fade else None)
-                greet_ink = []
-                _save_floor(floor)
-                del history[:-2 * max_turns]
-                strokes = []
-                marker("watch", host)
-                _drain(pen.q, touch.q)   # our own ink echoes on evdev — discard
+                now = _shot(cfg)
+                if (baseline is not None and now is not None
+                        and page_diff(baseline, now) is None):
+                    # nothing visibly changed since Smriti last wrote —
+                    # these strokes are our own echo, not user input
+                    print("no page change vs baseline — echo ignored",
+                          flush=True)
+                    strokes = []
+                    _drain(pen.q, touch.q)
+                else:
+                    floor = _reply(strokes, style, step, bottom, host, history,
+                                   floor, fade, fade_hold,
+                                   greet=greet_ink if greet_fade else None,
+                                   shot=now)
+                    greet_ink = []
+                    _save_floor(floor)
+                    del history[:-2 * max_turns]
+                    strokes = []
+                    marker("watch", host)
+                    _drain(pen.q, touch.q)   # our own ink echo — discard
+                    baseline = _shot(cfg)    # page WITH our reply = baseline
             time.sleep(0.05)
     except KeyboardInterrupt:
         pass
@@ -393,7 +423,7 @@ def run() -> None:
         print("monke sleeps.", flush=True)
 
 
-def _page_context(strokes) -> tuple[bytes, "object"]:
+def _page_context(strokes, shot=None) -> tuple[bytes, "object"]:
     """Vision input: real page screenshot with the fresh strokes overlaid in
     red — model sees full context (old replies, diagrams, documents) AND
     exactly what is new. Falls back to plain stroke render if the
@@ -401,14 +431,11 @@ def _page_context(strokes) -> tuple[bytes, "object"]:
     shot is the raw grayscale screenshot (or None) so callers can also run
     workarea analysis (free_bands) on it without a second grab."""
     from PIL import ImageDraw
-    shot = None
-    try:
-        with open(REPO_CFG, "rb") as f:
-            s = tomllib.load(f).get("screen", {})
-        shot = screenshot(__import__("os").environ.get("SMRITI_SCREEN_URL") or s.get("url", "https://10.11.99.1:2001"),
-                          s.get("user", "admin"), s.get("password", "password"))
-    except Exception:
-        pass
+    if shot is None:
+        try:
+            shot = _shot()
+        except Exception:
+            shot = None
     if shot is None:
         img = render_strokes(strokes, crop=True) if strokes \
             else render_strokes([], crop=False)
@@ -468,12 +495,12 @@ def _greet(style, step, bottom, host, history, floor) -> tuple[int, list]:
 
 
 def _reply(strokes, style, step, bottom, host, history, floor,
-           fade=False, fade_hold=10, greet=None) -> int:
+           fade=False, fade_hold=10, greet=None, shot=None) -> int:
     """Returns the new ink floor (max y written this session)."""
     marker("busy", host)
     print(f"page committed ({len(strokes)} strokes) -> asking monke…", flush=True)
     t0 = time.time()
-    png, shot = _page_context(strokes)
+    png, shot = _page_context(strokes, shot)
     user = image_msg(png, "The red strokes are Navy's newest writing. Reply. "
                           "Maths/circuits only inside $$...$$ — they are "
                           "typeset onto the paper; never show LaTeX source "
@@ -531,23 +558,29 @@ def _layout(text: str, style, y: int) -> list:
     """Reply → strokes. Prose via the stroke font; $$...$$ blocks typeset
     through LaTeX (maths/circuitikz) and stacked between the prose."""
     import re
-    segs: list[tuple[bool, str]] = []
-    for i, part in enumerate(re.split(r"\$\$(.+?)\$\$", text, flags=re.S)):
-        if i % 2:
-            segs.append((True, part))
-        else:
-            # model slip-up guard: single-$ inline math in prose would be
-            # inked as raw code by the stroke font — typeset it instead.
-            # (only prose is scanned, so inner $ in circuitikz labels is safe)
-            for j, sub in enumerate(
-                    re.split(r"(?<!\$)\$(?!\$)([^$\n]+?)\$(?!\$)", part)):
-                segs.append((j % 2 == 1, sub))
+    segs: list[tuple[str, str]] = []
+    for k, chunk in enumerate(re.split(r"(<svg\b.*?</svg>)", text,
+                                       flags=re.S | re.I)):
+        if k % 2:
+            segs.append(("svg", chunk))
+            continue
+        for i, part in enumerate(re.split(r"\$\$(.+?)\$\$", chunk, flags=re.S)):
+            if i % 2:
+                segs.append(("tex", part))
+            else:
+                # model slip-up guard: single-$ inline math in prose would be
+                # inked as raw code by the stroke font — typeset it instead.
+                # (only prose is scanned; inner $ in circuitikz labels is safe)
+                for j, sub in enumerate(
+                        re.split(r"(?<!\$)\$(?!\$)([^$\n]+?)\$(?!\$)", part)):
+                    segs.append(("tex" if j % 2 else "prose", sub))
     out = []
-    for is_tex, part in segs:
+    for kind, part in segs:
         part = part.strip()
         if not part:
             continue
-        if is_tex:  # tex block
+        if kind == "tex":
+            _log_block("tex", part)
             try:
                 from tex import tex_to_strokes
                 body = part if "\\begin" in part else f"${part}$"
@@ -558,12 +591,36 @@ def _layout(text: str, style, y: int) -> list:
                 fb = part if len(part) < 80 and "\\begin" not in part \
                     else "(monke drew a bad diagram - see log)"
                 seg = render(fb, style, x=100, y=y)
+        elif kind == "svg":
+            _log_block("svg", part)
+            try:
+                from svg import svg_to_strokes
+                seg = svg_to_strokes(part, x=100, y=y + 20, max_w=1200)
+                if not seg:
+                    raise ValueError("no drawable elements")
+            except Exception as e:
+                print(f"[svg] render failed: {str(e)[:200]}", flush=True)
+                seg = render("(monke drew a bad sketch - see log)",
+                             style, x=100, y=y)
         else:
             seg = render(part, style, x=100, y=y)
         if seg:
             out += seg
             y = max(py for s in seg for _, py in s) + 40
     return out
+
+
+def _log_block(kind: str, code: str) -> None:
+    """Maths/diagram source is kept separately (~/.config/smriti/blocks.log)
+    — the page only ever shows the rendered preview."""
+    try:
+        _FLOOR_FILE.parent.mkdir(parents=True, exist_ok=True)
+        with open(_FLOOR_FILE.parent / "blocks.log", "a",
+                  encoding="utf-8") as f:
+            f.write(f"\n--- {kind} {time.strftime('%Y-%m-%d %H:%M:%S')} ---\n"
+                    f"{code.strip()}\n")
+    except OSError:
+        pass
 
 
 if __name__ == "__main__":

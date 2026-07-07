@@ -1,5 +1,25 @@
 # Changelog
 
+## v0.1.6 — floating eye + diff guard + SVG (2026-07-07)
+- **Floating in-notebook eye** (xovi qmldiff patch): drawn UI bottom-right
+  of every notebook page — dash=idle, pupil=watching, tap toggles the
+  session. Screen UI, pen/eraser can't touch it. Plus AppLoad toolbox app
+  and `smriti-eye` CLI; all bridged to the daemon over the tailnet.
+- **Backfeed killed twice**: quiet-window echo drain AND a screenshot
+  baseline diff — a commit with no visual change vs the page after
+  Smriti's last write is discarded as echo (`screen.page_diff`).
+- **Greeting fades**: erased when the first answer lands or session ends.
+- **SVG sketches**: AI can emit `<svg>` blocks → drawn as pen strokes
+  (`host/svg.py`, zero deps). LaTeX stays for maths/circuits/block
+  diagrams. Source of every block logged to ~/.config/smriti/blocks.log —
+  the page only ever shows the rendered preview, never code.
+- **Screenshot layer split** to `host/screen.py` with self-healing grab
+  (corrupt gms frames auto-restart the stream service and regrab).
+- **Fallback chain**: `[[ai_fallback]]` entries tried in order
+  (LM Studio tailnet → free OpenRouter VL by default).
+- Installers split: `deploy/install-tablet.sh` (all tablet pieces) +
+  `deploy/setup-server.sh` (daemon); per-layer test table in README.
+
 ## v0.1.5 — sessions + workarea (2026-07-07)
 - Session UX: daemon boots IDLE (dash marker). **Tap the eye** → scan page
   (screenshot) + short Monke ink greeting + watch. **Hold ~1s** → session off.

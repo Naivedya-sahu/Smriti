@@ -115,8 +115,10 @@ uv run python host/write.py "hello monke" --style cursive
 
 ## Full setup on a NEW system
 
-Three pieces: tablet package (once per device), host daemon (PC or server),
-AI endpoint (any).
+Two independent installs — do either or both:
+- **Tablet package** (§1 vellum ink engine + §2 UI pieces) — everything on
+  the RM2.
+- **Server package** (§3) — the daemon on a PC, Pi, or VPS + AI endpoint (§4).
 
 ### 1. Tablet (reMarkable 2, once)
 
@@ -139,7 +141,20 @@ vellum update && vellum add smriti
 Updates forever after: `vellum update && vellum upgrade`. After a reMarkable
 OS update: `vellum reenable`.
 
-### 2. Host — PC, Pi 5, or any Linux VPS
+### 2. Tablet UI (floating eye, toolbox app, CLI bridge)
+
+One script installs the smriti-eye CLI, the file bridge service, the
+floating in-notebook eye and the AppLoad toolbox app (xovi pieces are
+skipped with a note if xovi isn't installed — one click in
+[reManager](https://remarkable.guide/guide/software/xovi.html) adds it):
+
+```sh
+deploy/install-tablet.sh rm2      # any ssh alias/IP for the tablet
+```
+
+Rerun after a reMarkable OS update (rootfs systemd units get wiped).
+
+### 3. Server — PC, Pi 5, or any Linux VPS
 
 ```sh
 git clone https://github.com/Naivedya-sahu/Smriti ~/smriti
@@ -156,7 +171,7 @@ sudo systemctl enable --now smriti-monke@$USER    # always-on daemon
 journalctl -fu smriti-monke@$USER
 ```
 
-### 3. AI endpoint
+### 4. AI endpoint
 
 `[ai]` in [config.toml](config.toml) — anything speaking
 `/v1/chat/completions` with vision. Selection order: env overrides
@@ -223,9 +238,11 @@ Device picks it up with `vellum upgrade`. Docker Desktop must be running.
 ## Layout
 
 ```
-host/monke.py      the daemon: sessions, eye marker, loop, fade, persona
-host/capture.py    pen/touch streams → strokes → page PNG; screenshot +
-                   workarea parser (ink floor, free bands)
+host/monke.py      the daemon: sessions, loop, placement, fade, persona
+host/capture.py    pen/touch event streams → strokes → page PNG
+host/screen.py     screenshot layer: grab (self-healing), ink floor,
+                   free bands (workarea), page diff (backfeed guard)
+host/svg.py        AI-emitted <svg> sketches → pen strokes (zero deps)
 host/ink.py        text → handwriting strokes; compiles .sf stroke-fonts
 host/oracle.py     AI provider (any OpenAI-compatible endpoint)
 host/write.py      manual writer (dev tool)
