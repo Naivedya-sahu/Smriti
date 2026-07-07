@@ -155,6 +155,24 @@ def ink_floor(img: Image.Image, min_dark_px: int = 80) -> int:
     return int(rows[-1]) if len(rows) else 0
 
 
+def free_bands(img: Image.Image, min_h: int = 120,
+               min_dark_px: int = 80) -> list[tuple[int, int]]:
+    """Empty horizontal bands (y0, y1) on the page, from a real screenshot —
+    the workarea parser. Same row-density threshold as ink_floor, so template
+    dots don't count as ink. Bands shorter than min_h are dropped; a fully
+    blank page returns [(0, CANVAS_H)]."""
+    a = np.asarray(img.resize((CANVAS_W, CANVAS_H))) < 100
+    inked = a.sum(axis=1) >= min_dark_px
+    bands, y0 = [], 0
+    for y in np.nonzero(inked)[0]:
+        if int(y) - y0 >= min_h:
+            bands.append((y0, int(y)))
+        y0 = int(y) + 1
+    if CANVAS_H - y0 >= min_h:
+        bands.append((y0, CANVAS_H))
+    return bands
+
+
 def run(host: str, idle: float, out: str, watch: bool, min_strokes: int) -> None:
     cap = Capture(host)
     print(f"capturing from {host} (idle commit {idle}s) — write on the tablet…",
@@ -193,7 +211,18 @@ def main() -> None:
     ap.add_argument("-o", "--out", default="page.png")
     ap.add_argument("--watch", action="store_true")
     ap.add_argument("--min-strokes", type=int, default=1)
+    ap.add_argument("--workarea", action="store_true",
+                    help="grab a live screenshot, print ink floor + free bands, exit")
     a = ap.parse_args()
+    if a.workarea:
+        import os
+        img = screenshot(os.environ.get("SMRITI_SCREEN_URL", "https://10.11.99.1:2001"))
+        if img is None:
+            raise SystemExit("screenshot service unreachable")
+        print(f"ink floor: {ink_floor(img)}")
+        for y0, y1 in free_bands(img):
+            print(f"free band: y {y0}-{y1} ({y1 - y0}px)")
+        return
     run(a.host, a.idle, a.out, a.watch, a.min_strokes)
 
 

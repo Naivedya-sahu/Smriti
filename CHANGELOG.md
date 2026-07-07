@@ -1,5 +1,16 @@
 # Changelog
 
+## v0.1.5 — sessions + workarea (2026-07-07)
+- Session UX: daemon boots IDLE (dash marker). **Tap the eye** → scan page
+  (screenshot) + short Monke ink greeting + watch. **Hold ~1s** → session off.
+- Eye marker: open eye (circle+pupil) = watching, filled = thinking, dash = idle.
+- Workarea parser (`capture.free_bands`): screenshot → free horizontal bands;
+  replies placed into the first band that fits instead of blind floor+50.
+  `python host/capture.py --workarea` = live debug.
+- Endpoint selection documented + retargeted for the tailnet: primary Gemini
+  (now fast from the Pi — old ~540s hang gone), fallback = desktop LM Studio
+  `qwen/qwen3-vl-8b` over tailscale IP. Env override order in config.toml.
+
 ## v0.1.4 — the loop (2026-07-06 → 07-07)
 - Monke daemon: write → idle commit → vision LLM → handwritten ink reply.
 - Ink status marker (bottom-right): hollow=watching, filled=thinking, dash=paused; finger-hold ~1s toggles.

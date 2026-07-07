@@ -23,17 +23,27 @@ you write on the tablet
             └─ reply → handwriting strokes → injected back as real ink
 ```
 
-Status marker (bottom-right, real ink): hollow circle = watching · filled =
-thinking · dash = paused. **Toggle from the tablet: hold a finger ~1s on the
-marker.** Optional riddle mode (`fade = true`): your words dissolve, the
-answer appears in their place, lingers, dissolves — page returns clean.
+### Sessions — the eye marker (bottom-right, real ink)
+
+The daemon boots **idle**: a dash in the corner, nothing captured, no AI.
+
+- **Tap the eye** → session starts: Monke scans the visible page
+  (screenshot), inks a short greeting below your ink, then watches
+  (open eye = watching, filled = thinking).
+- Write → pause ~3s → reply inks below your writing. Placement uses a
+  **workarea parser** on a real screenshot: replies land in free bands
+  between existing ink, page-turn only when nothing fits.
+- **Hold the eye ~1s** → session off (dash again). No laptop needed.
+
+Optional riddle mode (`fade = true`): your words dissolve, the answer
+appears in their place, lingers, dissolves — page returns clean.
 
 ## Quick start (daemon on your PC)
 
 ```sh
 uv sync
 uv run python host/ink.py selfcheck
-uv run python host/monke.py          # marker appears; write; pause; reply inks
+uv run python host/monke.py          # dash appears; tap it to start a session
 ```
 
 Manual writing without the daemon:
@@ -89,16 +99,25 @@ journalctl -fu smriti-monke@$USER
 ### 3. AI endpoint
 
 `[ai]` in [config.toml](config.toml) — anything speaking
-`/v1/chat/completions` with vision. Measured on this project:
+`/v1/chat/completions` with vision. Selection order: env overrides
+(`SMRITI_AI_BASE_URL` / `SMRITI_AI_MODEL` / `SMRITI_AI_KEY`) → `[ai]` →
+`[ai_fallback]` (tried automatically when the primary errors). Measured
+on this project:
 
 | Endpoint | Vision latency | Cost |
 |---|---|---|
 | Gemini flash-lite (default) | ~1.8s | free tier |
-| LM Studio, qwen3-vl-4b local | ~7s | free, offline |
+| LM Studio, qwen3-vl over tailnet | ~7s | free, offline |
 | Groq / OpenRouter | 1-3s | free tiers |
 
 Key goes in env `GEMINI_API_KEY` (Windows: `setx`, read from registry too;
 Linux: `~/.config/smriti/env` used by the systemd unit).
+
+With every machine on one tailscale tailnet (tablet runs `vellum add
+tailscale`, userspace networking), the same config works from anywhere:
+the Pi daemon reaches the desktop's LM Studio (`http://<desktop-ts-ip>:1234/v1`)
+and the tablet's screen service (`SMRITI_SCREEN_URL=https://<rm2-ts-ip>:2001`)
+with no port forwarding.
 
 **Hermes seam:** the same `[ai]` block is the backend toggle — when a Hermes
 agent (memory/KB spine on the Pi) exposes an OpenAI-compatible endpoint,
@@ -125,8 +144,9 @@ Device picks it up with `vellum upgrade`. Docker Desktop must be running.
 ## Layout
 
 ```
-host/monke.py      the daemon: loop, marker, toggle, fade, persona
-host/capture.py    pen/touch event streams → strokes → page PNG
+host/monke.py      the daemon: sessions, eye marker, loop, fade, persona
+host/capture.py    pen/touch streams → strokes → page PNG; screenshot +
+                   workarea parser (ink floor, free bands)
 host/ink.py        text → handwriting strokes; compiles .sf stroke-fonts
 host/oracle.py     AI provider (any OpenAI-compatible endpoint)
 host/write.py      manual writer (dev tool)
@@ -142,9 +162,15 @@ debian container + g++-arm-linux-gnueabihf + `pip install okp` + `make compile`.
 ## Troubleshooting
 
 - **No ink**: notebook page open? `vellum info smriti` on tablet? `ssh rm2 'echo ok'`?
-- **Strokes ignored right after a reply/toggle**: the daemon drains its own
-  ink echo for ~1s — wait for the hollow circle before writing.
-- **Reply overwrites old ink**: it only knows ink from this session — start
-  the daemon on a fresh page.
+- **Tap does nothing**: daemon running? (`systemctl --user status smriti-monke`
+  on the server). Tap must land on the corner marker zone and be short —
+  a ≥1s press is "session off".
+- **Strokes ignored right after a reply/tap**: the daemon drains its own
+  ink echo for ~1s — wait for the open eye before writing.
+- **Reply overwrites old ink**: session-start scan needs goMarkableStream
+  reachable (`SMRITI_SCREEN_URL`); without it placement falls back to the
+  persisted floor.
+- **No greeting on tap**: AI endpoint unreachable — check `[ai]` /
+  `[ai_fallback]` and the journal log.
 - **Upgrade sees nothing**: GitHub Pages CDN caches ≤10 min.
 - **Writing looks chunky**: `waypoint_step = 2` in config.toml.

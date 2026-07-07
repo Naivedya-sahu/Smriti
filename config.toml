@@ -1,4 +1,17 @@
 # Smriti host config.
+#
+# ENDPOINT SELECTION — which AI answers Monke:
+#   1. env overrides win: SMRITI_AI_BASE_URL / SMRITI_AI_MODEL / SMRITI_AI_KEY
+#      (set per machine, e.g. ~/.config/smriti/env on the Pi).
+#   2. else [ai] below is the primary.
+#   3. [ai_fallback] is tried automatically when the primary errors
+#      (offline, quota, cold model…).
+# All machines sit on the tailnet — use tailscale IPs/MagicDNS so the same
+# config works from the Pi, the laptop, or anywhere:
+#   home (desktop, LM Studio)  100.74.197.31   home.tail88dec1.ts.net
+#   monke (Pi 5, daemon)       100.97.149.121
+#   navy (laptop)              100.66.175.3
+#   rm2-smriti (tablet)        100.72.147.60   rm2-smriti.tail88dec1.ts.net
 
 [ai]
 # Any OpenAI-compatible endpoint. This is also the Hermes seam: when the
@@ -11,9 +24,10 @@ temperature = 0.7
 max_tokens = 1024
 
 # Fallback: tried automatically when the primary errors (offline, quota…).
+# Desktop LM Studio over the tailnet (reachable from Pi AND laptop).
 [ai_fallback]
-base_url = "http://localhost:1234/v1"
-model = "qwen3-vl-4b-instruct"
+base_url = "http://100.74.197.31:1234/v1"
+model = "qwen/qwen3-vl-8b"
 # Hermes on the Pi (future):
 #   base_url = "http://monke.local:8000/v1"
 #   model = "hermes"
@@ -40,6 +54,8 @@ fade_hold = 8               # seconds the reply stays readable before fading
 history_turns = 6           # conversation memory (page images + replies kept)
 
 [screen]
-url = "https://10.11.99.1:2001"   # goMarkableStream on the tablet
+# goMarkableStream on the tablet. USB default; over the tailnet set
+# SMRITI_SCREEN_URL=https://100.72.147.60:2001 (or the MagicDNS name).
+url = "https://10.11.99.1:2001"
 user = "admin"
 password = "password"

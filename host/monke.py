@@ -3,18 +3,21 @@ monke.py — Smriti closed loop (v0.1.4): the diary that talks back.
 
     uv run python host/monke.py
 
-Watches the RM2. Status marker (real ink, bottom-right corner):
-    hollow circle  = Monke watching
+Session model (v0.1.5): the daemon boots IDLE. Eye marker (real ink,
+bottom-right corner):
+    dash           = idle — no capture processing, no AI
+    open eye       = session on, Monke watching
     filled circle  = Monke thinking
-    dash           = paused
     (erased)       = daemon not running
 
-Write on the page, pause ~3s → page image + conversation history go to the
-vision model with the Monke persona → reply is inked below your writing.
-If the reply won't fit, a finger-swipe is injected to turn the page.
+TAP the eye (short finger tap on the corner) → session START: Monke scans
+the visible page (screenshot), inks a short greeting below the existing
+ink, then watches. Write, pause ~3s → page image + conversation history go
+to the vision model → reply inked below your writing (placed into a free
+band found on the real screenshot; page-turn if nothing fits).
 
-TOGGLE FROM THE TABLET: press and hold a finger ~1s on the marker (bottom-
-right corner) → pause/resume. No laptop needed.
+HOLD the eye (~1s) → session OFF: marker becomes a dash, nothing is
+captured or sent until the next tap. No laptop needed for any of this.
 
 Don't write while Monke is inking a reply — those strokes are discarded
 with the reply's own echo. Wait for the hollow circle.
@@ -31,7 +34,7 @@ import time
 import tomllib
 
 from capture import (Capture, StrokeBuilder, render_strokes, screenshot,
-                     ink_floor, CANVAS_W, CANVAS_H)
+                     ink_floor, free_bands, CANVAS_W, CANVAS_H)
 from ink import load_styles, render
 from oracle import chat, image_msg
 from write import to_lamp
@@ -104,11 +107,14 @@ def erase_box(strokes: list, host: str, pad: int = 12, sweep: int = 14) -> None:
 
 
 def marker(state: str, host: str) -> None:
-    """'watch' hollow, 'busy' filled, 'pause' dash, 'off' erased."""
+    """'watch' open eye, 'busy' filled, 'pause' dash (idle), 'off' erased."""
     wipe = "".join(f"erase circle {MARKER_X} {MARKER_Y} {r}\n" for r in (18, 13, 8, 4, 1))
     draw = ""
     if state == "watch":
-        draw = f"pen circle {MARKER_X} {MARKER_Y} 12\n"
+        # open eye: outline + pupil
+        draw = (f"pen circle {MARKER_X} {MARKER_Y} 12\n"
+                f"pen circle {MARKER_X} {MARKER_Y} 3\n"
+                f"pen circle {MARKER_X} {MARKER_Y} 1\n")
     elif state == "busy":
         draw = "".join(f"pen circle {MARKER_X} {MARKER_Y} {r}\n" for r in (12, 8, 5, 2))
     elif state == "pause":
@@ -117,7 +123,8 @@ def marker(state: str, host: str) -> None:
 
 
 class TouchGesture:
-    """Corner-hold (~1s, stationary) => 'toggle'.
+    """Corner-tap (short, stationary) => 'tap' (session start).
+    Corner-hold (~1s, stationary) => 'hold' (session off).
     Fast wide horizontal swipe => 'pageturn' (xochitl changed page)."""
 
     def __init__(self):
@@ -149,8 +156,8 @@ class TouchGesture:
             if self.down_at is None:
                 return None
             held, self.down_at = time.time() - self.down_at, None
-            if held >= HOLD_S and self.stayed and self._in_corner():
-                return "toggle"
+            if self.stayed and self._in_corner():
+                return "hold" if held >= HOLD_S else "tap"
             if held < 0.6 and abs(self._sx() - self.down_sx) > 400:
                 return "pageturn"
             return None
@@ -224,19 +231,15 @@ def run() -> None:
     history: list[dict] = []
     strokes: list[list[tuple[int, int]]] = []
     # ink floor = lowest y known to hold ink. Primary source: a REAL
-    # screenshot (goMarkableStream /screenshot) of the visible page;
-    # fallback: floor persisted from the previous run.
-    sf = _screen_floor(cfg)
-    floor = sf if sf is not None else _load_floor()
-    print(f"ink floor: {floor}"
-          + (" (from screenshot)" if sf is not None else " (persisted)"),
-          flush=True)
-    paused = False
+    # screenshot (goMarkableStream /screenshot) of the visible page,
+    # taken when a session starts; fallback: floor persisted last run.
+    floor = _load_floor()
+    paused = True                     # boot idle: no capture, no AI
     last_pen = 0.0
-    marker("watch", host)
+    marker("pause", host)
     _drain(pen.q, touch.q)
-    print("monke is watching — write on the tablet; hold a finger ~1s on the "
-          "corner marker to pause/resume (Ctrl-C to stop)", flush=True)
+    print("monke is idle — TAP the corner eye to start a session, "
+          "HOLD ~1s to stop one (Ctrl-C quits)", flush=True)
 
     try:
         while True:
@@ -249,13 +252,25 @@ def run() -> None:
                     strokes.append(s)
             for ev in _pull(touch.q):
                 g = tg.feed(ev) if ev is not None else None
-                if g == "toggle":
-                    paused = not paused
-                    strokes = []
-                    print("paused" if paused else "watching", flush=True)
-                    marker("pause" if paused else "watch", host)
+                if g == "tap" and paused:
+                    # session start: scan the page, greet, watch
+                    sf = _screen_floor(cfg)
+                    floor = sf if sf is not None else _load_floor()
+                    print(f"session start — ink floor {floor}"
+                          + (" (screenshot)" if sf is not None else " (persisted)"),
+                          flush=True)
+                    floor = _greet(style, step, bottom, host, history, floor)
+                    _save_floor(floor)
+                    paused, strokes = False, []
+                    marker("watch", host)
                     _drain(pen.q, touch.q)
-                elif g == "pageturn":
+                    print("watching", flush=True)
+                elif g == "hold" and not paused:
+                    paused, strokes = True, []
+                    print("session off", flush=True)
+                    marker("pause", host)
+                    _drain(pen.q, touch.q)
+                elif g == "pageturn" and not paused:
                     time.sleep(1.0)          # let xochitl repaint
                     sf = _screen_floor(cfg)
                     floor = sf if sf is not None else 0
@@ -283,11 +298,13 @@ def run() -> None:
         print("monke sleeps.", flush=True)
 
 
-def _page_context(strokes) -> bytes:
+def _page_context(strokes) -> tuple[bytes, "object"]:
     """Vision input: real page screenshot with the fresh strokes overlaid in
     red — model sees full context (old replies, diagrams, documents) AND
     exactly what is new. Falls back to plain stroke render if the
-    goMarkableStream service is unreachable."""
+    goMarkableStream service is unreachable. Returns (png_bytes, shot);
+    shot is the raw grayscale screenshot (or None) so callers can also run
+    workarea analysis (free_bands) on it without a second grab."""
     from PIL import ImageDraw
     shot = None
     try:
@@ -298,7 +315,8 @@ def _page_context(strokes) -> bytes:
     except Exception:
         pass
     if shot is None:
-        img = render_strokes(strokes, crop=True)
+        img = render_strokes(strokes, crop=True) if strokes \
+            else render_strokes([], crop=False)
     else:
         img = shot.convert("RGB")
         d = ImageDraw.Draw(img)
@@ -307,7 +325,50 @@ def _page_context(strokes) -> bytes:
                 d.line(s_, fill=(220, 0, 0), width=4)
     buf = io.BytesIO()
     img.save(buf, format="PNG")
-    return buf.getvalue()
+    return buf.getvalue(), shot
+
+
+def _place(text: str, style, y: int, shot, bottom: int) -> list | None:
+    """Lay the reply out at y; if it overflows the page, retry inside the
+    first free band (workarea parser on the real screenshot) tall enough to
+    hold it. None = no room anywhere on this page."""
+    reply = _layout(text, style, y)
+    if not reply:
+        return reply
+    h = max(py for s in reply for _, py in s) - y
+    if y + h <= bottom:
+        return reply
+    if shot is not None:
+        for y0, y1 in free_bands(shot):
+            if y0 >= 100 and min(y1, bottom) - y0 >= h + 30:
+                return _layout(text, style, y0 + 10)
+    return None
+
+
+def _greet(style, step, bottom, host, history, floor) -> int:
+    """Session-start greeting: one chat call with the scanned page as
+    context, short Monke line inked below the existing ink. Returns the
+    new floor."""
+    marker("busy", host)
+    png, shot = _page_context([])
+    user = image_msg(png, "Navy just tapped the eye: a diary session starts "
+                          "now. Greet him in ONE short Monke line (under 12 "
+                          "words). Reference what is on the page if useful.")
+    try:
+        text = chat([{"role": "system", "content": MONKE_SYSTEM}] + history + [user])
+    except Exception as e:
+        print(f"[greet] AI unreachable: {str(e)[:120]}", flush=True)
+        return floor
+    text = text.encode("ascii", "ignore").decode().strip()
+    history += [user, {"role": "assistant", "content": text}]
+    print(f"monke greets: {text}", flush=True)
+    y = floor + 50 if floor else 150
+    reply = _place(text, style, min(y, bottom - 100), shot, bottom)
+    if not reply:
+        print("no room for greeting — page full, greeting in log only", flush=True)
+        return floor
+    lamp(to_lamp(reply, style.get("pressure", 2400), step), host)
+    return max(floor, max(py for s in reply for _, py in s))
 
 
 def _reply(strokes, style, step, bottom, host, history, floor,
@@ -316,8 +377,8 @@ def _reply(strokes, style, step, bottom, host, history, floor,
     marker("busy", host)
     print(f"page committed ({len(strokes)} strokes) -> asking monke…", flush=True)
     t0 = time.time()
-    user = image_msg(_page_context(strokes),
-                     "The red strokes are Navy's newest writing. Reply.")
+    png, shot = _page_context(strokes)
+    user = image_msg(png, "The red strokes are Navy's newest writing. Reply.")
     text = chat([{"role": "system", "content": MONKE_SYSTEM}] + history + [user])
     text = text.encode("ascii", "ignore").decode().strip()
     history += [user, {"role": "assistant", "content": text}]
@@ -338,10 +399,11 @@ def _reply(strokes, style, step, bottom, host, history, floor,
     #     return floor
 
     # keep mode: place below everything inked this session, not just this
-    # commit — else writing above an old reply would overwrite it
+    # commit — else writing above an old reply would overwrite it. If that
+    # overflows, _place retries inside a free band from the screenshot.
     y = max(floor, max(py for s in strokes for _, py in s)) + 50
-    reply = _layout(text, style, y)
-    if reply and max(py for s in reply for _, py in s) > bottom:
+    reply = _place(text, style, y, shot, bottom)
+    if reply is None:
         # won't fit — turn pages (injected finger swipe) until one has room;
         # each landing checked with a REAL screenshot, never assumed blank
         for _ in range(3):
