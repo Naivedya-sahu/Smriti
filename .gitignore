@@ -1,21 +1,50 @@
+# Environments and Python caches
 .venv/
 __pycache__/
-preview*.png
-dist/
-build/
-*.pyc
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
 
-# private planning docs — never publish
-BUILD-SPEC.md
-ROADMAP.md
-SPEC.md
-STATE.md
+# Build/release outputs: publish assets separately, never commit them
+build/
+dist/
+*.exe
+*.msi
+*.apk
+*.zip
+*.pyz
+*.pkg
+*.rsa
+*.rsa.pub
+
+# Opaque vendor/runtime payload: retrieve only after provenance review for RM2 release.
+device/bin/lamp
+
+# Runtime/private application state
+sessions/
+logs/
+state/
+credentials.bin
+# config.toml is the scrubbed tracked default; user overrides use another path.
+*.local.toml
+.ssh/
+.claude/
+.planning/
+archive/
+
+# Captures, notebook material and generated previews
+*.log
+capture_log.txt
 captured*.png
 page*.png
-*.log
-*.txt.log
-capture_log.txt
 device_screen*.png
 fbtest*.png
-HANDOFF.md
+preview*.png
 tex_*.png
+*.pdf
+
+# OS/editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

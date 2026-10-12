@@ -3,3 +3,6 @@
 *.awk text eol=lf
 *.sf text eol=lf
 device/smriti-write text eol=lf
+device/bin/* text eol=lf
+device/bin/lamp binary
+device/xovi/* text eol=lf

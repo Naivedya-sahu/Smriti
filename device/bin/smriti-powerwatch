@@ -1,0 +1,33 @@
+#!/bin/sh
+# smriti-powerwatch — battery + radio state logger (read-only probe, tiny append).
+#   smriti-powerwatch start|stop|status
+# One CSV line per INTERVAL s to /home/root/.smriti/power.csv:
+#   epoch,capacity,status,current_uA,voltage_uV,armed,tailscaled,stream,wlan
+# A gap between epochs > INTERVAL = the tablet was suspended (loop frozen).
+B=/sys/class/power_supply/max77818_battery
+D=/home/root/.smriti
+LOG=$D/power.csv
+PID=$D/powerwatch.pid
+INTERVAL=${INTERVAL:-60}
+
+loop() {
+    [ -s "$LOG" ] || echo "epoch,capacity,status,current_uA,voltage_uV,armed,tailscaled,stream,wlan" > "$LOG"
+    while :; do
+        ts=down; systemctl is-active --quiet tailscaled && ts=up
+        st=off; systemctl is-active --quiet goMarkableStream && st=on
+        w=down; ip -4 -o addr show wlan0 2>/dev/null | grep -q inet && w=up
+        echo "$(date +%s),$(cat $B/capacity),$(cat $B/status),$(cat $B/current_now),$(cat $B/voltage_now),$(cat $D/armed 2>/dev/null),$ts,$st,$w" >> "$LOG"
+        sleep "$INTERVAL"
+    done
+}
+
+case "$1" in
+    start)
+        [ -f "$PID" ] && kill -0 "$(cat "$PID")" 2>/dev/null && { echo "running $(cat "$PID")"; exit 0; }
+        setsid "$0" _loop >/dev/null 2>&1 < /dev/null &
+        echo $! > "$PID"; echo "started $!" ;;
+    _loop) loop ;;
+    stop)  [ -f "$PID" ] && kill "$(cat "$PID")" 2>/dev/null; rm -f "$PID"; echo stopped ;;
+    status) if [ -f "$PID" ] && kill -0 "$(cat "$PID")" 2>/dev/null; then echo "running $(cat "$PID"), $(($(wc -l < "$LOG") - 1)) samples"; else echo stopped; fi ;;
+    *) echo "usage: smriti-powerwatch start|stop|status" >&2; exit 1 ;;
+esac

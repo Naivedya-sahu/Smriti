@@ -1,0 +1,71 @@
+#!/bin/sh
+# smriti-setup — system side of the smriti apk (runs ON the tablet).
+#
+#   smriti-setup install   # apk post-install/post-upgrade + `vellum reenable`
+#   smriti-setup remove    # apk pre-deinstall
+#
+# Everything under /home/root ships as tracked apk files. Only the rootfs
+# pieces live here: the bridge's systemd unit (wiped by every OS update —
+# vellum reenable reruns this via hooks/post-os-upgrade/smriti) and the power
+# gate (streamer + tailnet off boot; the bridge starts them when armed).
+V=/home/root/.vellum
+S=/home/root/.smriti
+UNIT=/etc/systemd/system/smriti-eye-watch.service
+
+rw()      { [ -x $V/bin/mount-rw ] && $V/bin/mount-rw || true; }
+restore() { [ -x $V/bin/mount-restore ] && $V/bin/mount-restore || true; }
+
+install_() {
+    rw
+    mkdir -p $S
+    [ -f $S/armed ] || echo 0 > $S/armed       # first install: disarmed
+    [ -f $S/state ] || echo idle > $S/state
+    # hold the tailnet while the bridge restarts: armed=0 would make it stop
+    # tailscaled and cut an install running over tailscale (reManager/ssh).
+    # USB installs (10.11.99.x) don't need it.
+    case "${SSH_CLIENT:-}" in
+        10.11.99.*) ;;
+        *) [ -f $S/remote-hold ] || { touch $S/remote-hold; echo "smriti: tailnet held up for this install — 'smriti-remote off' to release"; } ;;
+    esac
+    cp $V/share/smriti/smriti-eye-watch.service $UNIT
+    # power gate: goMarkableStream + tailscaled + tunnel only when armed/held
+    systemctl disable goMarkableStream smriti-tunnel tailscaled 2>/dev/null || true
+    systemctl stop goMarkableStream smriti-tunnel 2>/dev/null || true
+    if [ -d /etc/systemd/system/goMarkableStream.service.d ]; then
+        mkdir -p $S/disabled-dropins
+        mv /etc/systemd/system/goMarkableStream.service.d/*.conf \
+           $S/disabled-dropins/ 2>/dev/null || true
+    fi
+    systemctl daemon-reload
+    systemctl enable smriti-eye-watch
+    systemctl restart smriti-eye-watch
+    restore
+    if [ -d /home/root/xovi/extensions.d ] && [ -z "${VELLUM_REENABLE:-}" ]; then
+        echo "smriti: restarting xochitl to load the eye + app (closes the open notebook)"
+        systemctl restart xochitl
+    fi
+    [ -d /home/root/xovi/extensions.d ] || \
+        echo "smriti: xovi not found — eye + app installed but inactive (add xovi/appload/qt-resource-rebuilder in reManager)"
+    echo "smriti: daemon address -> echo SMRITI_DAEMON=<ip>:7333 > /home/root/.config/smriti-eye"
+}
+
+remove_() {
+    rw
+    systemctl disable --now smriti-eye-watch 2>/dev/null || true
+    rm -f $UNIT
+    # hand the streamer its xochitl drop-in back; boot autostarts stay off
+    # (re-enable by hand if wanted: systemctl enable goMarkableStream tailscaled)
+    if [ -d $S/disabled-dropins ]; then
+        mkdir -p /etc/systemd/system/goMarkableStream.service.d
+        mv $S/disabled-dropins/*.conf /etc/systemd/system/goMarkableStream.service.d/ 2>/dev/null || true
+    fi
+    systemctl daemon-reload
+    restore
+    echo "smriti: removed. State kept in $S (delete by hand if unwanted)."
+}
+
+case "${1:-install}" in
+    install) install_ ;;
+    remove)  remove_ ;;
+    *) echo "usage: smriti-setup install|remove" >&2; exit 2 ;;
+esac

@@ -1,51 +1,25 @@
 #!/bin/sh
-# install-tablet.sh — put everything Smriti needs ON THE TABLET.
-# Run from the repo root on any machine with ssh access to the RM2:
+# install-tablet.sh — install/upgrade the smriti apk on the RM2 over ssh.
 #
 #     deploy/install-tablet.sh [ssh-host]     # default host: rm2
 #
-# Installs:
-#   1. smriti-eye CLI + smriti-eye-watch bridge (+systemd unit)
-#   2. floating in-notebook eye (xovi qt-resource-rebuilder patch)
-#   3. Smriti toolbox app (xovi AppLoad)  [optional control panel]
-# 2 and 3 are skipped with a note when xovi isn't installed (get it via
-# reManager). The smriti-write ink engine itself comes from the vellum apk
-# repo — see README "Tablet one-time setup".
-#
-# reMarkable OS updates wipe /etc/systemd/system — rerun this after updating.
+# Same result as reManager (add the repo once, then install "smriti"): the
+# apk carries the ink engine, eye bridge + service, CLIs, floating eye and
+# the Smriti app; its post-install hook (smriti-setup) wires the rootfs unit
+# and power gate. Needs vellum on the tablet (reManager installs it). After a
+# reMarkable OS update: `vellum reenable` (or reManager's reenable) — no rerun.
 set -e
 H="${1:-rm2}"
-cd "$(dirname "$0")/.."
+REPO=https://naivedya-sahu.github.io/Smriti
+KEY=naivedya.sahu2@gmail.com-6a4bae6f.rsa.pub
 
-echo "== smriti-eye CLI + bridge =="
-scp device/bin/smriti-eye device/bin/smriti-eye-watch "$H":/home/root/.vellum/bin/
-scp device/xovi/smriti-eye-watch.service "$H":/etc/systemd/system/
-ssh "$H" 'chmod +x /home/root/.vellum/bin/smriti-eye /home/root/.vellum/bin/smriti-eye-watch
-mkdir -p /home/root/.smriti
-systemctl daemon-reload
-systemctl enable --now smriti-eye-watch'
-
-if ssh "$H" '[ -d /home/root/xovi/exthome/qt-resource-rebuilder ]'; then
-    echo "== floating eye (qmldiff patch) =="
-    scp device/xovi/smriti-eye.qmd "$H":/home/root/xovi/exthome/qt-resource-rebuilder/
-    NEED_RESTART=1
-else
-    echo "!! xovi/qt-resource-rebuilder not found — floating eye skipped (install xovi via reManager)"
-fi
-
-if ssh "$H" '[ -d /home/root/xovi/exthome/appload ]'; then
-    echo "== toolbox app (AppLoad) =="
-    ssh "$H" 'mkdir -p /home/root/xovi/exthome/appload/smriti'
-    scp device/appload/smriti/manifest.json device/appload/smriti/icon.png \
-        device/appload/smriti/resources.rcc "$H":/home/root/xovi/exthome/appload/smriti/
-    NEED_RESTART=1
-else
-    echo "!! xovi/appload not found — toolbox app skipped"
-fi
-
-if [ -n "$NEED_RESTART" ]; then
-    echo "== restarting xochitl (closes the open notebook) =="
-    ssh "$H" 'systemctl restart xochitl'
-fi
-echo "done. Configure the daemon address on the tablet if it isn't the default:"
-echo "  ssh $H 'echo SMRITI_DAEMON=<pi-tailscale-ip>:7333 > /home/root/.config/smriti-eye'"
+ssh "$H" "set -e
+V=/home/root/.vellum
+[ -x \$V/bin/vellum ] || { echo 'vellum missing — install it with reManager first'; exit 1; }
+cd \$V/etc/apk
+[ -f keys/$KEY ] || wget -q --no-check-certificate -O keys/$KEY $REPO/$KEY
+grep -qx '$REPO' repositories || echo '$REPO' >> repositories
+\$V/bin/vellum update
+if \$V/bin/vellum info smriti >/dev/null 2>&1; then \$V/bin/vellum upgrade smriti; else \$V/bin/vellum add smriti; fi"
+echo "done. Point the tablet at the daemon (laptop over USB = 10.11.99.2):"
+echo "  ssh $H 'echo SMRITI_DAEMON=10.11.99.2:7333 > /home/root/.config/smriti-eye'"

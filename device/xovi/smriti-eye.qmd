@@ -5,6 +5,21 @@ AFFECT [[17298303916558156758]]
 		Rectangle {
 			id: smritiEyeUi
 			property bool watching: false
+			property bool failed: false     // last model call failed (state "watching error")
+			property bool armed: false
+			// daemon writes "<epoch> <stage>". It is truth: idle = closed eye;
+			// looking = open eye; reading/thinking/settling = three dots;
+			// inking = pen stroke. Stale/missing = open only while watching.
+			property string stage: ""
+			property int pulse: 0
+			readonly property bool thinking: stage === "reading" || stage === "thinking" || stage === "settling" || stage === "confirming"
+			readonly property bool drawing: stage === "inking"
+			readonly property bool open: watching && !thinking && !drawing && !failed
+			readonly property bool closed: !watching && !thinking && !drawing && !failed
+			// Manual control: the eye is INVISIBLE and inert until the
+			// Smriti drawer app arms it (writes /home/root/.smriti/armed).
+			// Before arming: no eye in any notebook, no capture, no usage.
+			visible: smritiEyeUi.armed
 			width: 56
 			height: 56
 			radius: 28
@@ -12,45 +27,133 @@ AFFECT [[17298303916558156758]]
 			border.color: "black"
 			border.width: 3
 			z: 9999
-			anchors.right: parent.right
-			anchors.bottom: parent.bottom
-			anchors.rightMargin: 18
-			anchors.bottomMargin: 18
+			// position, chosen in the Smriti app -> settings.json "eye":
+			// legacy "bottom-right" (default, reachable with the toolbar
+			// minimised) | "bottom-left" | "top-middle", or "x,y" = normalized
+			// fractions 0..1 of the free page area (clamped: the eye always
+			// stays fully on screen, 18 px from the edges like before)
+			property string pos: "bottom-right"
+			property real fx: 1
+			property real fy: 1
+			property real pw: parent ? parent.width : 1404
+			property real ph: parent ? parent.height : 1872
+			x: 18 + smritiEyeUi.fx * Math.max(0, smritiEyeUi.pw - smritiEyeUi.width - 36)
+			y: 18 + smritiEyeUi.fy * Math.max(0, smritiEyeUi.ph - smritiEyeUi.height - 36)
 
+			// idle: shut eyelid. Watching: open pupil. Thinking: pulsing dots.
+			// Drawing: diagonal pen/stroke. Each is mutually exclusive.
 			Rectangle {
-				anchors.centerIn: parent
-				width: 16
-				height: 16
-				radius: 8
-				color: "black"
-				visible: smritiEyeUi.watching
+				anchors.centerIn: parent; width: 24; height: 5; radius: 3
+				color: "black"; visible: smritiEyeUi.closed
 			}
 			Rectangle {
-				anchors.centerIn: parent
-				width: 24
-				height: 5
-				color: "black"
-				visible: !smritiEyeUi.watching
+				anchors.centerIn: parent; width: 16; height: 16; radius: 8
+				color: "black"; visible: smritiEyeUi.open
+			}
+			Row {
+				anchors.centerIn: parent; spacing: 4; visible: smritiEyeUi.thinking
+				Repeater { model: 3
+					Rectangle { width: 7; height: 7; radius: 4; color: "black"
+						opacity: smritiEyeUi.pulse === index ? 1.0 : 0.25 }
+				}
+			}
+			Rectangle {
+				anchors.centerIn: parent; width: 25; height: 6; radius: 2; color: "black"
+				rotation: -45; visible: smritiEyeUi.drawing
+			}
+			Rectangle {
+				anchors.centerIn: parent; width: 0; height: 0
+				border.color: "black"; border.width: 5; rotation: -45
+				visible: smritiEyeUi.drawing; x: 34; y: 12
+			}
+			Text {
+				anchors.centerIn: parent; text: "!"; font.pixelSize: 40; font.bold: true
+				visible: smritiEyeUi.failed
 			}
 
 			Timer {
-				interval: 3000
+				interval: 1000
 				running: true
 				repeat: true
 				triggeredOnStart: true
 				onTriggered: {
-					var xhr = new XMLHttpRequest();
-					xhr.open("GET", "file:///home/root/.smriti/state");
-					xhr.onreadystatechange = function() {
-						if (xhr.readyState === XMLHttpRequest.DONE) {
-							smritiEyeUi.watching = (xhr.responseText.indexOf("watching") === 0);
-						}
-					};
-					xhr.send();
+					smritiEyeUi.smritiPoll("smritiStateXhr", "state", smritiEyeUi.smritiStateDone);
+					smritiEyeUi.smritiPoll("smritiArmedXhr", "armed", smritiEyeUi.smritiArmedDone);
+					smritiEyeUi.smritiPoll("smritiStageXhr", "/tmp/smriti-stage", smritiEyeUi.smritiStageDone);
+					smritiEyeUi.smritiPoll("smritiPosXhr", "settings.json", smritiEyeUi.smritiPosDone);
+				}
+			}
+			Timer { interval: 280; running: smritiEyeUi.thinking; repeat: true
+				onTriggered: smritiEyeUi.pulse = (smritiEyeUi.pulse + 1) % 3 }
+
+			// ONE request object per polled file, re-opened each tick: a new
+			// XMLHttpRequest per tick leaked ~10-17 KB each in xochitl's QML
+			// engine -> 6.5 MB/min, OOM kill at 846 MB (device 2026-09-30)
+			property var smritiStateXhr: null
+			property var smritiArmedXhr: null
+			property var smritiStageXhr: null
+			property var smritiCmdXhr: null
+			property var smritiConfXhr: null
+			property var smritiPosXhr: null
+			function smritiPoll(slot, file, done) {
+				var x = smritiEyeUi[slot];
+				if (!x) {
+					x = new XMLHttpRequest();
+					smritiEyeUi[slot] = x;
+				}
+				if (x.readyState !== XMLHttpRequest.UNSENT && x.readyState !== XMLHttpRequest.DONE) return;
+				x.onreadystatechange = done;
+				x.open("GET", file.charAt(0) === "/" ? "file://" + file : "file:///home/root/.smriti/" + file);
+				x.send();
+			}
+			function smritiStateDone() {
+				var x = smritiEyeUi.smritiStateXhr;
+				if (x.readyState === XMLHttpRequest.DONE) {
+					smritiEyeUi.watching = (x.responseText.indexOf("watching") === 0);
+					smritiEyeUi.failed = (x.responseText.indexOf("error") > 0);
+				}
+			}
+			function smritiArmedDone() {
+				var x = smritiEyeUi.smritiArmedXhr;
+				if (x.readyState === XMLHttpRequest.DONE) {
+					// present + "1" = armed; missing file / "0" = off
+					smritiEyeUi.armed = (x.responseText.indexOf("1") === 0);
 				}
 			}
 
+			function smritiStageDone() {
+				var x = smritiEyeUi.smritiStageXhr;
+				if (x.readyState !== XMLHttpRequest.DONE) return;
+				var m = String(x.responseText || "").trim().split(/\s+/);
+				var ts = parseFloat(m[0]);
+				smritiEyeUi.stage = (m.length > 1 && !isNaN(ts) && Date.now() / 1000 - ts < 20) ? m[1] : "";
+			}
+
+			function smritiPosDone() {
+				var x = smritiEyeUi.smritiPosXhr;
+				if (x.readyState !== XMLHttpRequest.DONE) return;
+				var p = "";
+				try { p = String(JSON.parse(x.responseText).eye || ""); } catch (e) { p = ""; }
+				var f = [1, 1];   // bottom-right (default / unknown)
+				if (p === "bottom-left") f = [0, 1];
+				else if (p === "top-middle") f = [0.5, 0];
+				else {
+					var m = p.split(",");
+					if (m.length === 2 && !isNaN(parseFloat(m[0])) && !isNaN(parseFloat(m[1])))
+						f = [parseFloat(m[0]), parseFloat(m[1])];
+				}
+				smritiEyeUi.pos = p;
+				smritiEyeUi.fx = Math.max(0, Math.min(1, f[0]));
+				smritiEyeUi.fy = Math.max(0, Math.min(1, f[1]));
+			}
+
+			// one toggle per tap: TapHandler + MouseArea both fired it (start
+			// then stop); a second touch within 800 ms is ignored
+			property double lastToggle: 0
 			function smritiToggle() {
+				var now = Date.now();
+				if (now - smritiEyeUi.lastToggle < 800) return;
+				smritiEyeUi.lastToggle = now;
 				console.log("[smriti-eye] tapped, watching=" + smritiEyeUi.watching);
 				var xhr = new XMLHttpRequest();
 				xhr.open("PUT", "file:///home/root/.smriti/eye-cmd");
@@ -58,12 +161,187 @@ AFFECT [[17298303916558156758]]
 				smritiEyeUi.watching = !smritiEyeUi.watching;
 			}
 
-			TapHandler {
-				onTapped: smritiEyeUi.smritiToggle()
-			}
 			MouseArea {
 				anchors.fill: parent
 				onClicked: smritiEyeUi.smritiToggle()
+			}
+
+			// ── confirm window: pops out of the eye when the daemon asks ──
+			// Protocol (~/.smriti): confirm.json {id, kind, summary, shown}
+			// + confirm.png (what was selected/read) -> Navy edits `shown`,
+			// taps Confirm/Discard -> confirm-reply ("confirm\n<text>" |
+			// "discard"). The daemon removes the files when done.
+			property string confirmId: ""
+			property string answeredId: ""
+			Rectangle {
+				id: smritiConfirm
+				visible: smritiEyeUi.confirmId !== ""
+				width: 900
+				height: 760
+				// centred on the eye, kept on the page (same 18 px margins)
+				x: Math.max(18, Math.min(smritiEyeUi.pw - width - 18, smritiEyeUi.x + 28 - width / 2)) - smritiEyeUi.x
+				// top of the page (y relative to the eye): the on-screen keyboard
+				// rises from the bottom and would cover a popup anchored there
+				y: 110 - smritiEyeUi.y
+				onVisibleChanged: { if (!visible) smritiEyeUi.smritiKeyboardOff(); }
+				color: "white"
+				border.color: "black"
+				border.width: 4
+				radius: 12
+				property string kind: ""
+				property string summary: ""
+
+				Column {
+					anchors.fill: parent
+					anchors.margins: 24
+					spacing: 16
+					Rectangle {
+						visible: smritiConfirmText.activeFocus
+						width: parent.width; height: 70; radius: 10
+						color: "white"; border.color: "black"; border.width: 3
+						Text { anchors.centerIn: parent; text: "Done editing (hide keyboard)"; font.pixelSize: 30 }
+						MouseArea { anchors.fill: parent; onClicked: smritiEyeUi.smritiKeyboardOff() }
+					}
+					Text {
+						text: "Monke read (" + smritiConfirm.kind + "): " + smritiConfirm.summary
+						font.pixelSize: 30
+						width: parent.width
+						wrapMode: Text.Wrap
+					}
+					Image {
+						id: smritiConfirmImg
+						width: parent.width
+						height: 330
+						fillMode: Image.PreserveAspectFit
+						cache: false
+						source: smritiEyeUi.confirmId === "" ? ""
+							: "file:///home/root/.smriti/confirm.png?" + smritiEyeUi.confirmId
+					}
+					Rectangle {
+						width: parent.width
+						height: 150
+						border.color: "black"
+						border.width: 2
+						TextEdit {
+							id: smritiConfirmText
+							anchors.fill: parent
+							anchors.margins: 10
+							font.pixelSize: 28
+							wrapMode: TextEdit.Wrap
+						}
+					}
+					Row {
+						spacing: 24
+						Rectangle {
+							width: 400; height: 90; radius: 10
+							color: "black"
+							Text { anchors.centerIn: parent; text: "Confirm"; color: "white"; font.pixelSize: 34 }
+							MouseArea { anchors.fill: parent; onClicked: smritiEyeUi.smritiAnswer("confirm\n" + smritiConfirmText.text) }
+						}
+						Rectangle {
+							width: 400; height: 90; radius: 10
+							color: "white"; border.color: "black"; border.width: 3
+							Text { anchors.centerIn: parent; text: "Discard"; font.pixelSize: 34 }
+							MouseArea { anchors.fill: parent; onClicked: smritiEyeUi.smritiAnswer("discard") }
+						}
+					}
+				}
+			}
+
+			// ── daemon -> xochitl commands (~/.smriti/qml-cmd, root-only file):
+			// {"id":n,"cmd":"probe"|"eval","js":"..."} -> result in qml-out
+			// ("<id>\n<result>"). Dev channel for pen colour / layer control.
+			property string cmdId: ""
+			function smritiRun(c) {
+				var out = "";
+				try {
+					if (c.cmd === "eval") {
+						out = String(eval(c.js));
+					} else if (c.cmd === "probe") {
+						out = smritiEyeUi.smritiProbe();
+					}
+				} catch (e) {
+					out = "ERR " + e;
+				}
+				var w = new XMLHttpRequest();
+				w.open("PUT", "file:///home/root/.smriti/qml-out");
+				w.send(String(c.id) + "\n" + out);
+			}
+
+			function smritiProbe() {
+				var out = [];
+				var names = ["documentViewTools", "sceneController", "toolbar", "documentController"];
+				for (var i = 0; i < names.length; i++) {
+					try {
+						out.push(names[i] + " = " + eval(names[i]));
+					} catch (e) {
+						out.push(names[i] + " ! " + e);
+					}
+				}
+				var keys = ["documentViewTools", "sceneController", "activePen", "currentColor", "activeTool", "toolbar", "selectedPen"];
+				var p = smritiEyeUi.parent;
+				var d = 0;
+				while (p && d < 40) {
+					var has = [];
+					for (var k = 0; k < keys.length; k++) {
+						try {
+							if (p[keys[k]] !== undefined) {
+								has.push(keys[k]);
+							}
+						} catch (e2) {
+						}
+					}
+					out.push(d + ": " + p + (has.length ? "  HAS " + has.join(",") : ""));
+					p = p.parent;
+					d++;
+				}
+				return out.join("\n");
+			}
+
+			function smritiKeyboardOff() {
+				smritiConfirmText.focus = false;
+				Qt.inputMethod.hide();
+			}
+
+			function smritiAnswer(body) {
+				smritiEyeUi.smritiKeyboardOff();
+				var xhr = new XMLHttpRequest();
+				xhr.open("PUT", "file:///home/root/.smriti/confirm-reply");
+				xhr.send(body);
+				smritiEyeUi.answeredId = smritiEyeUi.confirmId;
+				smritiEyeUi.confirmId = "";
+			}
+
+			Timer {
+				interval: 150
+				running: smritiEyeUi.armed
+				repeat: true
+				onTriggered: {
+					smritiEyeUi.smritiPoll("smritiCmdXhr", "qml-cmd", smritiEyeUi.smritiCmdDone);
+					smritiEyeUi.smritiPoll("smritiConfXhr", "confirm.json", smritiEyeUi.smritiConfDone);
+				}
+			}
+			function smritiCmdDone() {
+				var cx = smritiEyeUi.smritiCmdXhr;
+				if (cx.readyState !== XMLHttpRequest.DONE) return;
+				var c = null;
+				try { c = JSON.parse(cx.responseText); } catch (e) { c = null; }
+				if (!c || String(c.id) === smritiEyeUi.cmdId) return;
+				smritiEyeUi.cmdId = String(c.id);
+				smritiEyeUi.smritiRun(c);
+			}
+			function smritiConfDone() {
+				var x = smritiEyeUi.smritiConfXhr;
+				if (x.readyState !== XMLHttpRequest.DONE) return;
+				var r = null;
+				try { r = JSON.parse(x.responseText); } catch (e) { r = null; }
+				if (!r) { smritiEyeUi.confirmId = ""; return; }
+				var id = String(r.id);
+				if (id === smritiEyeUi.confirmId || id === smritiEyeUi.answeredId) return;
+				smritiConfirm.kind = r.kind || "";
+				smritiConfirm.summary = r.summary || "";
+				smritiConfirmText.text = r.shown || "";
+				smritiEyeUi.confirmId = id;
 			}
 		}
 		}

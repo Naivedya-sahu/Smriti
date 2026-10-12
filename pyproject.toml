@@ -1,10 +1,23 @@
 [project]
 name = "smriti"
-version = "0.1.0"
+version = "0.5.0"
 requires-python = ">=3.12"
 dependencies = [
     "numpy>=2.5.1",
     "pillow>=12.3.0",
     "pypdfium2>=5.11.0",
     "rmscene>=0.8.0",
+]
+
+# GPU boxes only (scribe OCR service): uv sync --extra scribe
+# The daemon/Pi never needs these — scribe client is stdlib.
+[project.optional-dependencies]
+scribe = [
+    "torch>=2.4",
+    "transformers>=4.44,<5",   # 5.x breaks TrOCRProcessor tokenizer load
+    "sentencepiece>=0.2",   # TrOCR tokenizer backend
+]
+app = [
+    "pyinstaller>=6.22.3",
+    "pystray>=0.19.5",
 ]

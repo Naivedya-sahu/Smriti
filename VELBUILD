@@ -1,15 +1,17 @@
-maintainer="Naivedya Sahu <naivedya.sahu2@gmail.com>"
+maintainer="Smriti maintainers <maintainers@example.invalid>"
 pkgname=smriti
-pkgver=0.1.1
-pkgrel=5
+pkgver=0.2.0
+pkgrel=0
 _commit=COMMIT_PLACEHOLDER
 upstream_author="Naivedya-sahu"
 category="writing"
-pkgdesc="Handwriting text writer for reMarkable 2 (pen-event injection, real ink)"
+pkgdesc="Handwritten AI diary for reMarkable 2: ink engine, eye bridge, floating eye, Smriti app"
 url="https://github.com/Naivedya-sahu/smriti"
 arch="armv7"
 license="MIT"
 options="!check !fhs !strip !tracedeps"
+# apk lifecycle scripts — deploy/release.sh writes them into build/
+install="$pkgname.post-install $pkgname.post-upgrade $pkgname.pre-deinstall"
 readmeurl="https://raw.githubusercontent.com/Naivedya-sahu/smriti/$_commit/README.md"
 source="smriti-$_commit.tar.gz::https://github.com/Naivedya-sahu/smriti/archive/$_commit.tar.gz"
 builddir="$srcdir/smriti-$_commit"
@@ -28,6 +30,29 @@ package() {
 	install -d "$pkgdir"/home/root/.vellum/share/smriti/fonts
 	install -m644 "$builddir"/device/fonts/*.sf \
 		"$pkgdir"/home/root/.vellum/share/smriti/fonts/
+
+	# eye bridge + CLIs + on-device setup (rootfs unit, power gate)
+	local b f
+	for b in smriti-eye smriti-eye-watch smriti-remote smriti-setup; do
+		install -Dm755 "$builddir"/device/bin/$b "$pkgdir"/home/root/.vellum/bin/$b
+	done
+	install -Dm644 "$builddir"/device/xovi/smriti-eye-watch.service \
+		"$pkgdir"/home/root/.vellum/share/smriti/smriti-eye-watch.service
+	# `vellum reenable` runs every executable here after an OS update
+	install -d "$pkgdir"/home/root/.vellum/hooks/post-os-upgrade
+	printf '#!/bin/sh\nexec /home/root/.vellum/bin/smriti-setup install\n' \
+		> "$pkgdir"/home/root/.vellum/hooks/post-os-upgrade/smriti
+	chmod 755 "$pkgdir"/home/root/.vellum/hooks/post-os-upgrade/smriti
+
+	# xovi pieces — inert until xovi + appload + qt-resource-rebuilder exist
+	install -Dm644 "$builddir"/device/xovi/smriti-eye.qmd \
+		"$pkgdir"/home/root/xovi/exthome/qt-resource-rebuilder/smriti-eye.qmd
+	install -Dm644 "$builddir"/device/qmd/smriti-ask.qmd \
+		"$pkgdir"/home/root/xovi/exthome/qt-resource-rebuilder/smriti-ask.qmd
+	for f in manifest.json icon.png resources.rcc; do
+		install -Dm644 "$builddir"/device/appload/smriti/$f \
+			"$pkgdir"/home/root/xovi/exthome/appload/smriti/$f
+	done
 
 	install -Dm644 "$builddir"/LICENSE \
 		"$pkgdir"/home/root/.vellum/licenses/$pkgname/LICENSE

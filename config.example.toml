@@ -1,0 +1,35 @@
+# Commit-safe Smriti defaults. Copy to user state; do not commit real endpoints,
+# device addresses, passwords, credentials or Claude profile paths.
+
+[brain]
+provider = "chatgpt"             # chatgpt | openai | anthropic | claude | local
+model = ""
+turn = "split"                   # split | merged
+plan = "json"                    # structured render plan
+transport = "direct"             # Smriti-owned per-user ChatGPT sign-in
+allow_env_keys = false
+
+[endpoints]
+chatgpt_url = "https://chatgpt.com/backend-api/codex/responses"
+openai_url = "https://api.openai.com/v1"
+anthropic_url = "https://api.anthropic.com"
+local_url = "http://127.0.0.1:1234/v1"
+
+[capture]
+# Priority is tailnet → USB → configured Wi-Fi. Use the installed app commands
+# `smriti link set-tailnet`, `smriti link set-wifi` or `smriti link scan --save`.
+endpoints = []
+idle_seconds = 2.8
+settle_seconds = 3.0
+
+[monke]
+marker_ink = false
+reply_style = "cursive"
+safe_layer = true
+confirm = true
+greet_fade = true
+input_fade = true
+
+[screen]
+# Resolver selects URL from [capture] endpoint; do not put a real tablet URL here.
+template = "dots"

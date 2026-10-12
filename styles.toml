@@ -29,7 +29,7 @@ size = 64
 wght = 500
 slant = 0.0        # degrees; Dancing Script already slants
 pressure = 2400
-decimate = 2
+decimate = 1
 line_height = 1.5
 
 [style.print]

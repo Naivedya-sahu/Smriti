@@ -1,0 +1,17 @@
+{
+  "v": 1,
+  "outline": {"text_lines": 3, "figures": ["circuit", "latex", "latex", "latex", "graph", "graph", "latex"]},
+  "place": null,
+  "blocks": [
+    {"type": "text", "role": "body", "text": "Series RLC at omega = 1000 rad/s: XL = 20 ohm, XC = 10 ohm, so it is inductive."},
+    {"type": "circuit", "tex": "\\begin{circuitikz}\\draw (0,0) to[sV, l=$V_s$] (0,3) to[R, l=$10\\,\\Omega$] (3,3) to[L, l=$20\\,\\mathrm{mH}$] (6,3) to[C, l=$100\\,\\mu\\mathrm{F}$] (6,0) -- (0,0);\\end{circuitikz}"},
+    {"type": "latex", "role": "body", "tex": "Z = R + j(X_L - X_C) = 10 + j10 = 14.14\\angle 45^\\circ\\,\\Omega"},
+    {"type": "latex", "role": "body", "tex": "I = \\frac{V_s}{Z} = \\frac{10\\angle 0^\\circ}{14.14\\angle 45^\\circ} = 0.7071\\angle -45^\\circ\\,\\mathrm{A}"},
+    {"type": "latex", "role": "highlight", "tex": "V_R = 7.071\\angle -45^\\circ,\\; V_L = 14.14\\angle 45^\\circ,\\; V_C = 7.071\\angle -135^\\circ\\ \\mathrm{V}"},
+    {"type": "graph", "id": "G1", "plot": {"type": "function", "title": "v_s(t) and i(t)", "xlabel": "t (s)", "ylabel": null, "x": [0, 0.01257], "y": null, "curves": [{"expr": "14.14*sin(1000*t)", "label": "v_s (V)"}, {"expr": "10*sin(1000*t - pi/4)", "label": "10 i (A)"}], "n": null, "values": null, "zeros": null, "poles": null, "b": null, "a": null, "domain": null, "scale": null, "show": null, "marks": null}},
+    {"type": "text", "role": "body", "text": "Resonance at omega0 = 1/sqrt(LC) = 707.1 rad/s, where |I| peaks at 1 A."},
+    {"type": "graph", "id": "G2", "plot": {"type": "function", "title": "|I| vs omega", "xlabel": "omega (rad/s)", "ylabel": "|I| (A)", "x": [100, 3000], "y": [0, 1.1], "curves": [{"expr": "10/sqrt(100+(0.02*x-1/(1e-4*x))**2)", "label": "|I|"}], "n": null, "values": null, "zeros": null, "poles": null, "b": null, "a": null, "domain": null, "scale": null, "show": null, "marks": [{"x": 707.1, "label": "omega0"}]}},
+    {"type": "latex", "role": "answer", "tex": "P = 5\\,\\mathrm{W},\\; Q = 5\\,\\mathrm{var},\\; S = 7.071\\,\\mathrm{VA},\\; \\mathrm{pf} = 0.707\\ \\text{lagging}"},
+    {"type": "text", "role": "answer", "text": "Answer: Z = 14.14 ohm at 45 deg, I = 0.707 A at -45 deg, pf 0.707 lagging."}
+  ]
+}

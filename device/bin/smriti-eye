@@ -11,23 +11,69 @@
 # dials through the userspace stack instead.
 #
 # Daemon address: SMRITI_DAEMON=ip[:port] env, or persist it in
-# /home/root/.config/smriti-eye (a line: SMRITI_DAEMON=100.97.149.121:7333)
+# /home/root/.config/smriti-eye (lines: SMRITI_DAEMON=127.0.0.1:7333
+# and, when the daemon enforces one, SMRITI_TOKEN=<control token>)
 [ -f /home/root/.config/smriti-eye ] && . /home/root/.config/smriti-eye
-D="${SMRITI_DAEMON:-100.97.149.121:7333}"
+D="${SMRITI_DAEMON:-127.0.0.1:7333}"
 HOST="${D%%:*}"
 PORT="${D##*:}"
 [ "$PORT" = "$HOST" ] && PORT=7333
+Q=""
+[ -n "$SMRITI_TOKEN" ] && Q="?token=$SMRITI_TOKEN"
 
 case "$1" in
-    start|stop|status)
-        # sleep keeps stdin open — tailscale nc hangs up on stdin EOF
-        # before the reply arrives otherwise
-        ( printf 'GET /%s HTTP/1.0\r\nHost: %s\r\n\r\n' "$1" "$HOST"; sleep 2 ) \
-            | /home/root/.vellum/bin/tailscale nc "$HOST" "$PORT" \
-            | sed '1,/^\r*$/d'
+    focus)
+        # selection menu: focus <action> <x0,y0,x1,y1|auto> <page|scene>
+        case "$2" in ask|plot|draw|solve|write|explain) ;; *) exit 1;; esac
+        case "$3" in auto) ;; *[!0-9,.-]*|'') exit 1;; esac
+        case "${4:-page}" in page|scene) SPACE="${4:-page}";; *) exit 1;; esac
+        Q="?action=$2&box=$3&space=$SPACE${SMRITI_TOKEN:+&token=$SMRITI_TOKEN}"
+        set -- focus ;;
+    call)
+        case "$2" in ''|*[!A-Za-z0-9_/-]*) exit 1;; esac
+        CALL_PATH=$2
+        Q="${SMRITI_TOKEN:+?token=$SMRITI_TOKEN}"
+        set -- call ;;
+esac
+case "$1" in
+    start|stop|status|focus|call)
+        # function, not $(...): command substitution strips the \r\n\r\n
+        # that ends the HTTP request
+        req() { printf 'GET /%s%s HTTP/1.0\r\nHost: %s\r\n\r\n' "$1" "$Q" "$HOST"; }
+        # EVERY call is bounded: a reply that never came (daemon killed
+        # mid-request) froze the bridge loop for an hour, so eye taps were
+        # silently ignored (device, 2026-09-26). No `timeout` on the RM2:
+        # bash `read -t` bounds the reply, a watchdog bounds the connect.
+        case "$HOST" in
+            100.*|*.ts.net)
+                # tailnet: userspace tailscaled has no tun, so only
+                # `tailscale nc` routes. sleep keeps stdin open — it hangs
+                # up on stdin EOF before the reply arrives otherwise
+                ( req "${CALL_PATH:-$1}"; sleep 2 ) \
+                    | /home/root/.vellum/bin/tailscale nc "$HOST" "$PORT" &
+                p=$!
+                # watchdog off the pipe: an inherited stdout holds `| sed`
+                # open until sleep exits -> every call took 10 s (2026-09-29)
+                ( sleep 10; kill "$p" 2>/dev/null ) >/dev/null 2>&1 &
+                k=$!
+                wait "$p" 2>/dev/null
+                kill "$k" 2>/dev/null ;;
+            *)
+                # USB (10.11.99.x) / LAN: plain TCP, works with no internet
+                # and the tailnet down. HTTP/1.0 = server closes when done.
+                req "${CALL_PATH:-$1}" | bash -c \
+                    '( sleep 10; kill -9 $$ ) >/dev/null 2>&1 & w=$!
+                     exec 3<>"/dev/tcp/$0/$1" || exit 1
+                     cat >&3
+                     while IFS= read -r -t 6 -u 3 l || [ -n "$l" ]; do
+                         printf "%s\n" "$l"; l=""
+                     done
+                     kill $w 2>/dev/null' \
+                    "$HOST" "$PORT" ;;
+        esac | sed '1,/^\r*$/d'
         ;;
     *)
-        echo "usage: smriti-eye start|stop|status" >&2
+        echo "usage: smriti-eye start|stop|status|focus <action> <box|auto> [page|scene]|call <path>" >&2
         exit 1
         ;;
 esac

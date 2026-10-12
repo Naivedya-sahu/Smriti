@@ -1,0 +1,14 @@
+# graphify ignore — written by Monke (plan/L3 3.1, 2026-09-25). Hidden from git via .git/info/exclude.
+dist/
+build/
+*.ttf
+# images wait for a vision backend
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.bmp
+*.webp
+*.svg
+*.webm
+*.mp4

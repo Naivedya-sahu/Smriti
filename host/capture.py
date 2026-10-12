@@ -19,6 +19,8 @@ import argparse
 import queue
 import struct
 import subprocess
+
+from deps import ssh_argv
 import threading
 import time
 from pathlib import Path
@@ -45,14 +47,16 @@ def to_screen(ax: int, ay: int) -> tuple[int, int]:
 
 
 class Capture:
+    pen_last = 0.0   # time of the last event1 chunk: Navy's pen (hover floods it) or lamp's own ink
+
     def __init__(self, host: str = "rm2", device: str = "/dev/input/event1"):
         self.host, self.device = host, device
         # keepalive: an idle evdev stream sends no bytes, and ssh/tailscale
         # reap a silent connection (~180s) — probes keep it open so the
         # daemon doesn't lose the stream just because nobody wrote for a bit
         self.proc = subprocess.Popen(
-            ["ssh", "-o", "ServerAliveInterval=20", "-o", "ServerAliveCountMax=3",
-             host, f"cat {device}"],
+            [*ssh_argv(host, "-o", "ServerAliveInterval=20", "-o", "ServerAliveCountMax=3"),
+             f"cat {device}"],
             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
         self.q: queue.Queue[tuple] = queue.Queue()
         threading.Thread(target=self._pump, daemon=True).start()
@@ -65,6 +69,8 @@ class Capture:
             if not chunk:
                 self.q.put(None)
                 return
+            if self.device.endswith("event1"):
+                Capture.pen_last = time.time()
             buf += chunk
             while len(buf) >= EV_SIZE:
                 self.q.put(struct.unpack(EV_FMT, buf[:EV_SIZE]))

@@ -1,78 +1,35 @@
-# Smriti host config.
-#
-# ENDPOINT SELECTION — which AI answers Monke:
-#   1. env overrides win: SMRITI_AI_BASE_URL / SMRITI_AI_MODEL / SMRITI_AI_KEY
-#      (set per machine, e.g. ~/.config/smriti/env on the Pi).
-#   2. else [ai] below is the primary.
-#   3. [ai_fallback] is tried automatically when the primary errors
-#      (offline, quota, cold model…).
-# All machines sit on the tailnet — use tailscale IPs/MagicDNS so the same
-# config works from the Pi, the laptop, or anywhere:
-#   home (desktop, LM Studio)  100.74.197.31   home.tail88dec1.ts.net
-#   monke (Pi 5, daemon)       100.97.149.121
-#   navy (laptop)              100.66.175.3
-#   rm2-smriti (tablet)        100.72.147.60   rm2-smriti.tail88dec1.ts.net
+# Commit-safe Smriti defaults. User-specific overrides belong outside this repo.
+# Never put real endpoints, tablet addresses, passwords, credentials or Claude profile paths here.
 
-[ai]
-# Any OpenAI-compatible endpoint. This is also the Hermes seam: when the
-# Hermes agent (Pi) exposes /v1/chat/completions, point base_url at it and
-# Monke routes through Hermes — no code change.
-base_url = "https://generativelanguage.googleapis.com/v1beta/openai"
-model = "gemini-3.1-flash-lite"
-api_key_env = "GEMINI_API_KEY"
-temperature = 0.7
-max_tokens = 1024
+[brain]
+provider = "openai"              # openai | chatgpt | anthropic | claude | local
+model = ""
+turn = "split"                   # split | merged
+plan = "json"                    # structured render plan
+transport = "direct"             # Smriti-owned per-user ChatGPT sign-in
+allow_env_keys = false
 
-# Fallback CHAIN: tried in order when the primary errors (offline, quota…).
-# 1) Desktop LM Studio over the tailnet (reachable from Pi AND laptop).
-[[ai_fallback]]
-base_url = "http://100.74.197.31:1234/v1"
-model = "qwen/qwen3-vl-8b"
-
-# 2) Free hosted VL model (rate-limited; needs OPENROUTER_API_KEY in env).
-[[ai_fallback]]
-base_url = "https://openrouter.ai/api/v1"
-model = "qwen/qwen2.5-vl-7b-instruct:free"
-api_key_env = "OPENROUTER_API_KEY"
-# Hermes on the Pi (future):
-#   base_url = "http://monke.local:8000/v1"
-#   model = "hermes"
-# Groq (free tier, very fast):
-#   base_url = "https://api.groq.com/openai/v1"
-#   model = "meta-llama/llama-4-scout-17b-16e-instruct"
-#   api_key_env = "GROQ_API_KEY"
-# OpenRouter free VL models (rate-limited):
-#   base_url = "https://openrouter.ai/api/v1"
-#   model = "qwen/qwen2.5-vl-7b-instruct:free"
-#   api_key_env = "OPENROUTER_API_KEY"
+[endpoints]
+chatgpt_url = "https://chatgpt.com/backend-api/codex/responses"
+openai_url = "https://api.openai.com/v1"
+anthropic_url = "https://api.anthropic.com"
+local_url = "http://127.0.0.1:1234/v1"
 
 [capture]
-host = "rm2"                # ssh alias for the tablet (see README)
+# Priority is tailnet → USB → configured Wi-Fi. Use the installed app commands
+# `smriti link set-tailnet`, `smriti link set-wifi` or `smriti link scan --save`.
+endpoints = []
 idle_seconds = 2.8
+settle_seconds = 3.0
 
 [monke]
-marker_ink = false          # draw the corner eye as real ink. Costly: each
-                            # state change = ssh+lamp round trip + echo drain,
-                            # and erasing wipes real ink in the corner. The
-                            # corner tap/hold gestures + smriti-eye CLI work
-                            # fine without it.
-reply_style = "cursive"     # any style from styles.toml (see styles.toml
-                            # header for adding custom ttf/otf fonts)
-#reply_size = 64            # font sizing override (page px), else style's
-#reply_line_height = 1.5    # line spacing override (multiple of size)
-greet_fade = true           # greeting erased when the first answer lands
-input_fade = true           # your question fades too — the answer takes
-                            # its place (frees page space)
-waypoint_step = 3           # lower = smoother, slower
-page_bottom = 1780          # reply overflowing this -> page-turn swipe
-fade = false                # riddle mode — CURRENTLY DISABLED in code (visual
-                            # verify pending; see monke.py _reply). ERASES ink.
-fade_hold = 8               # seconds the reply stays readable before fading
-history_turns = 6           # conversation memory (page images + replies kept)
+marker_ink = false
+reply_style = "cursive"
+safe_layer = true
+confirm = true
+greet_fade = true
+input_fade = true
 
 [screen]
-# goMarkableStream on the tablet. USB default; over the tailnet set
-# SMRITI_SCREEN_URL=https://100.72.147.60:2001 (or the MagicDNS name).
-url = "https://10.11.99.1:2001"
-user = "admin"
-password = "password"
+# Resolver selects URL from [capture] endpoint; do not put a real tablet URL here.
+template = "dots"

@@ -35,6 +35,14 @@ COMMIT=$(git rev-parse HEAD)
 # 3 — build dir with pinned VELBUILD → APKBUILD
 rm -rf dist build && mkdir -p build dist
 sed "s/COMMIT_PLACEHOLDER/$COMMIT/" VELBUILD > build/APKBUILD
+for h in post-install post-upgrade; do
+    printf '#!/bin/sh
+/home/root/.vellum/bin/smriti-setup install
+' > "build/smriti.$h"
+done
+printf '#!/bin/sh
+/home/root/.vellum/bin/smriti-setup remove
+' > build/smriti.pre-deinstall
 
 # 4 — abuild in Alpine container (keys persisted to ~/.abuild on host)
 mkdir -p "$HOME/.abuild"
@@ -44,7 +52,7 @@ MSYS_NO_PATHCONV=1 docker run --rm \
     alpine:3.22 sh -ec '
         apk add -q alpine-sdk
         grep -q "^PACKAGER=" /root/.abuild/abuild.conf 2>/dev/null || \
-            echo "PACKAGER=\"Naivedya Sahu <naivedya.sahu2@gmail.com>\"" >> /root/.abuild/abuild.conf
+            echo "PACKAGER=\"Naivedya Sahu <62708947+Naivedya-sahu@users.noreply.github.com>\"" >> /root/.abuild/abuild.conf
         ls /root/.abuild/*.rsa >/dev/null 2>&1 || abuild-keygen -a -n
         cp /root/.abuild/*.rsa.pub /etc/apk/keys/
         grep -q PACKAGER_PRIVKEY /root/.abuild/abuild.conf || \

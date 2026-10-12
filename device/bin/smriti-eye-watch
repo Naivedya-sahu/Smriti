@@ -1,33 +1,116 @@
 #!/bin/sh
-# smriti-eye-watch — bridge between the QML floating eye and the daemon.
+# smriti-eye-watch — bridge between the QML floating eye and the daemon,
+# plus the on-device power gate (screen streamer + tailnet).
 #
 # The eye (xovi qmldiff patch) writes "start"/"stop" into eye-cmd via
 # XMLHttpRequest file:// PUT; this loop forwards the command to the daemon
 # (smriti-eye -> tailscale nc) and keeps the state file fresh so the eye
 # shows the true daemon state.
-DIR=/home/root/.smriti
+#
+# ARMED gate (manual control): the Smriti drawer app writes 1/0 into
+# `armed`. Smriti does NOTHING until armed:
+#   disarmed -> armed : start goMarkableStream (screen streamer the daemon
+#                       needs for screenshots) — but NO session yet.
+#   armed -> disarmed : force the session to stop and stop goMarkableStream,
+#                       so an unused tablet streams nothing and spends no AI.
+#
+# TAILNET gate (power): tailscaled is the biggest network drain, so it runs
+# ONLY when it can actually be useful. Desired-up =
+#     (armed AND internet reachable)  OR  a manual remote-dev hold
+# `smriti-remote on/off` sets/clears the hold (remote dev / external fetches,
+# survives disarm). Arming brings the tailnet up when the internet is live;
+# disarming drops it (unless a hold is set); losing internet drops it too —
+# no point burning radio on a VPN that can't reach its control server.
+DIR=${SMRITI_DIR:-/home/root/.smriti}
 CMD=$DIR/eye-cmd
 STATE=$DIR/state
-EYE=/home/root/.vellum/bin/smriti-eye
+ARMED=$DIR/armed
+HOLD=$DIR/remote-hold           # set by `smriti-remote on`, cleared by `off`
+EYE=${SMRITI_EYE:-/home/root/.vellum/bin/smriti-eye}
+SYNC_EVERY=120          # daemon status re-sync period (s). Higher = fewer
+                        # tailscale-nc round trips = fewer radio wakeups.
+TS_EVERY=20             # tailnet reconcile period (s)
+
+net_up() { ping -c 1 -W 2 1.1.1.1 >/dev/null 2>&1; }
+
+# Bring tailscaled to the desired state. $1 = current armed value.
+reconcile_ts() {
+    want=0
+    # Tailnet only on a manual hold (Navy 2026-10-09: tailscale off by
+    # default — USB/LAN reach the daemon with plain TCP, see smriti-eye).
+    # Arming no longer brings it up: tailscaled was the biggest drain.
+    if [ -f "$HOLD" ]; then
+        want=1                          # manual remote-dev hold wins
+    fi
+    if systemctl is-active --quiet tailscaled; then have=1; else have=0; fi
+    [ "$want" = "$have" ] && return
+    if [ "$want" = 1 ]; then
+        systemctl start tailscaled >/dev/null 2>&1
+    else
+        systemctl stop tailscaled >/dev/null 2>&1
+    fi
+}
 
 mkdir -p "$DIR"
+[ -f "$ARMED" ] || echo 0 > "$ARMED"    # boot disarmed
+prev_armed=$(cat "$ARMED" 2>/dev/null)
 n=0
 while true; do
+    # --- arm/disarm edge -> streamer + session + tailnet ---
+    a=$(cat "$ARMED" 2>/dev/null)
+    if [ "$a" != "$prev_armed" ]; then
+        if [ "$a" = 1 ]; then
+            systemctl start goMarkableStream >/dev/null 2>&1
+        else
+            "$EYE" stop >/dev/null 2>&1          # end any live session
+            echo idle > "$STATE"
+            systemctl stop goMarkableStream >/dev/null 2>&1
+        fi
+        reconcile_ts "$a"                        # bring tailnet up/down at once
+        prev_armed=$a
+    fi
+
+    # --- eye command bridge (only meaningful while armed) ---
     if [ -f "$CMD" ]; then
         c=$(cat "$CMD" 2>/dev/null)
         rm -f "$CMD"
-        case "$c" in
-            start|stop)
-                "$EYE" "$c" >/dev/null 2>&1
-                # optimistic; the periodic sync below corrects if it failed
-                [ "$c" = start ] && echo watching > "$STATE" || echo idle > "$STATE"
-                ;;
-        esac
+        if [ "$a" = 1 ]; then
+            case "$c" in
+                start|stop)
+                    "$EYE" "$c" >/dev/null 2>&1
+                    # optimistic; the periodic sync below corrects if it failed
+                    [ "$c" = start ] && echo watching > "$STATE" || echo idle > "$STATE"
+                    ;;
+                focus\ *)
+                    case "$c" in
+                        *[!A-Za-z0-9_,.\ -]*) : ;;
+                        *) set -- $c
+                           case "$2:$3:${4:-page}" in
+                               ask:auto:page|ask:auto:scene|plot:auto:page|plot:auto:scene|draw:auto:page|draw:auto:scene|solve:auto:page|solve:auto:scene|write:auto:page|write:auto:scene|explain:auto:page|explain:auto:scene)
+                                   "$EYE" focus "$2" "$3" "${4:-page}" >/dev/null 2>&1 ;;
+                               ask:*:page|ask:*:scene|plot:*:page|plot:*:scene|draw:*:page|draw:*:scene|solve:*:page|solve:*:scene|write:*:page|write:*:scene|explain:*:page|explain:*:scene)
+                                   case "$3" in *[!0-9,.-]*|'') :;; *) "$EYE" focus "$2" "$3" "${4:-page}" >/dev/null 2>&1;; esac ;;
+                           esac ;;
+                    esac
+                    ;;
+                panel\ *)
+                    set -- $c
+                    case "$2" in ''|*[!A-Za-z0-9_-]*) :;; *) "$EYE" call "panel/$2" >/dev/null 2>&1;; esac
+                    ;;
+            esac
+        fi
     fi
+
     n=$((n + 1))
-    if [ $((n % 30)) -eq 0 ]; then
+    # periodic tailnet reconcile: catches internet coming/going and a hold
+    # set/cleared out of band, without a start/stop edge.
+    [ $((n % TS_EVERY)) -eq 0 ] && reconcile_ts "$a"
+    if [ "$a" = 1 ] && [ $((n % SYNC_EVERY)) -eq 0 ]; then
         s=$("$EYE" status 2>/dev/null | tr -d '\r\n')
-        [ -n "$s" ] && echo "$s" > "$STATE"
+        # no answer = daemon down / laptop asleep: show that, never a stale
+        # "watching" (the eye stayed "watching" 11 min after the daemon died)
+        if [ -n "$s" ]; then echo "$s" > "$STATE"; else echo offline > "$STATE"; fi
     fi
+    [ "${SMRITI_EYE_ONCE:-0}" = 1 ] && break
     sleep 1
 done

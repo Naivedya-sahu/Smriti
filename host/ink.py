@@ -89,12 +89,49 @@ def skeletonize(img: np.ndarray) -> np.ndarray:
                 sk[kill] = False
                 changed = True
         if not changed:
-            return sk
+            return _keep_dots(img, sk)
+
+
+def _keep_dots(img: np.ndarray, sk: np.ndarray, r: int = 5) -> np.ndarray:
+    """Zhang-Suen erases a small round blob (a decimal point) completely:
+    put one skeleton pixel back at the centre of any ink cluster that lies
+    farther than r px from every skeleton pixel (runs 9-10: '6.2038')."""
+    near = sk.copy()
+    for dy in range(-r, r + 1):
+        for dx in range(-r, r + 1):
+            near |= np.roll(np.roll(sk, dy, 0), dx, 1)
+    lost = img & ~near
+    while lost.any():
+        y, x = np.argwhere(lost)[0]
+        ys, xs = np.nonzero(lost[max(0, y - 2):y + 2 * r, max(0, x - 2 * r):x + 2 * r])
+        cy, cx = int(ys.mean()) + max(0, y - 2), int(xs.mean()) + max(0, x - 2 * r)
+        sk[cy, cx] = True
+        lost[max(0, y - 2):y + 2 * r, max(0, x - 2 * r):x + 2 * r] = False
+    return sk
+
+
+class Tinted(list):
+    """A stroke with its xochitl pen colour (0 black, 6 blue, 7 red)."""
+    def __init__(self, pts=(), color: int = 0):
+        super().__init__(pts)
+        self.color = color
+
+
+def color_masks(rgb: np.ndarray, dark: int = 128) -> dict:
+    """Dark pixels of an RGB render split by hue -> {xochitl pen colour:
+    mask}: 7 red, 6 blue, 0 everything else (black, grey, green...). Only
+    colours present are returned (run 14: blue plot inked black)."""
+    r, g, b = (rgb[..., i].astype(np.int16) for i in range(3))
+    ink = (0.299 * r + 0.587 * g + 0.114 * b) < dark
+    red = ink & (r > g + 60) & (r > b + 60)
+    blue = ink & (b > r + 60) & (b > g + 40)
+    out = {0: ink & ~red & ~blue, 6: blue, 7: red}
+    return {c: m for c, m in out.items() if m.any()}
 
 
 # ── stroke tracing ────────────────────────────────────────────────────────────
 
-def trace(skel: np.ndarray, decimate: int = 2) -> list[list[tuple[int, int]]]:
+def trace(skel: np.ndarray, decimate: int = 2, dots: bool = False) -> list[list[tuple[int, int]]]:
     """1px skeleton → ordered polylines [(x,y),...]. Endpoint-first walk;
     junctions consumed greedily. ponytail: O(n^2) endpoint rescan per stroke,
     fine at glyph/line scale; spatial index if pages get slow."""
@@ -124,11 +161,35 @@ def trace(skel: np.ndarray, decimate: int = 2) -> list[list[tuple[int, int]]]:
             pts = pts[::decimate] + ([pts[-1]] if (len(pts) - 1) % decimate else [])
         if len(pts) >= 2:
             strokes.append(pts)
+        elif dots:                        # a 1 px skeleton = a dot (decimal point)
+            strokes.append(pts * 2)
     strokes.sort(key=lambda s: (min(p[0] for p in s), min(p[1] for p in s)))
     return strokes
 
 
 # ── high-level: text → page strokes ──────────────────────────────────────────
+
+def _tiny(s: list) -> bool:
+    xs, ys = [x for x, _ in s], [y for _, y in s]
+    return max(xs) - min(xs) < 3 and max(ys) - min(ys) < 3
+
+
+def _dot(s: list, r: float = 2.5) -> list:
+    """A stroke smaller than the pen (a decimal point) -> a small ring the
+    lamp can draw; a zero-length stroke leaves no ink."""
+    xs, ys = [x for x, _ in s], [y for _, y in s]
+    cx, cy = sum(xs) / len(xs), sum(ys) / len(ys)
+    return [(round(cx + dx), round(cy + dy))       # ints: frames are indexed by them
+            for dx, dy in ((r, 0), (0, r), (-r, 0), (0, -r), (r, 0))]
+
+
+def visible_dots(strokes: list) -> list:
+    """A tiny stroke alone = a dot (decimal point): ring it so the lamp inks
+    it. Touching a glyph = a skeleton spur: drop it (runs 7-10)."""
+    big = [p for st in strokes if not _tiny(st) for p in st]
+    return [st if not _tiny(st) else _dot(st) for st in strokes
+            if not _tiny(st) or all(abs(x - st[0][0]) + abs(y - st[0][1]) > 4 for x, y in big)]
+
 
 def render(text: str, style: dict, x: int = 100, y: int = 150,
            max_w: int = 1300) -> list[list[tuple[int, int]]]:
@@ -143,7 +204,7 @@ def render(text: str, style: dict, x: int = 100, y: int = 150,
     for line in _wrap(text, font, max_w - x):
         if line.strip():
             bmp = rasterize(line, font, style.get("slant", 0.0))
-            for s in trace(skeletonize(bmp), dec):
+            for s in visible_dots(trace(skeletonize(bmp), dec, dots=True)):
                 out.append([(px + x, py + cy) for px, py in s])
         cy += line_h
     return out

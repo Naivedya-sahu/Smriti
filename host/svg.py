@@ -167,18 +167,61 @@ def svg_to_strokes(svg: str, x: int = 100, y: int = 100,
             m = re.search(r'd="([^"]+)"', el)
             if m:
                 raw += _path_strokes(m.group(1))
-    if not raw:
+    texts = _texts(svg)
+    if not raw and not texts:
         return []
-    xs = [px for s in raw for px, _ in s]
-    ys = [py for s in raw for _, py in s]
+    xs = [px for s in raw for px, _ in s] + [v for t in texts for v in (t[0], t[0] + t[4])]
+    ys = [py for s in raw for _, py in s] + [v for t in texts for v in (t[1] - t[2], t[1])]
     w, h = max(xs) - min(xs) or 1.0, max(ys) - min(ys) or 1.0
     scale = min(max_w / w, max_h / h, 4.0)     # cap: tiny svgs shouldn't blow up
-    scaled = [[(int(x + (px - min(xs)) * scale), int(y + (py - min(ys)) * scale))
-               for px, py in s] for s in raw]
+    sx = lambda px: x + (px - min(xs)) * scale
+    sy = lambda py: y + (py - min(ys)) * scale
+    scaled = [[(int(sx(px)), int(sy(py))) for px, py in s] for s in raw]
     # densify: a rect/polygon is only a few waypoints, and the downstream
     # lamp decimation (every Nth point) would delete whole edges. Resample
     # each segment to ~4px so no edge can be dropped and lines stay solid.
-    return [_densify(s, 4) for s in scaled]
+    out = [_densify(s, 4) for s in scaled]
+    for tx, ty, fs, label, tw, anchor in texts:     # labels in Monke's print hand
+        k = {"middle": 0.5, "end": 1.0}.get(anchor, 0.0)
+        out += _label(label, sx(tx + k * tw), sy(ty), fs * scale, k)
+    return out
+
+
+def _texts(svg: str) -> list[tuple[float, float, float, str, float]]:
+    """<text> -> (left x, baseline y, font size, label, est. width, anchor), svg units.
+    run 10: block diagrams came out as empty boxes without these."""
+    out = []
+    for attrs, body in re.findall(r"<text\b([^>]*)>(.*?)</text>", svg, flags=re.I | re.S):
+        label = re.sub(r"<[^>]+>", "", body).strip()
+        if not label:
+            continue
+        fs = _attr(attrs, "font-size", 12.0)
+        tw = 0.55 * fs * len(label)
+        tx = _attr(attrs, "x")
+        a = re.search(r'text-anchor="(\w+)"', attrs)
+        if a and a.group(1) == "middle":
+            tx -= tw / 2
+        elif a and a.group(1) == "end":
+            tx -= tw
+        out.append((tx, _attr(attrs, "y"), fs, label, tw, a.group(1) if a else "start"))
+    return out
+
+
+def _label(label: str, ax: float, base: float, px: float, k_anchor: float = 0.0) -> list:
+    """One label as pen strokes: glyph height ~px on the baseline; anchored
+    at ax by its real width (0 start, 0.5 middle, 1 end)."""
+    from ink import load_styles, render, visible_dots
+    style = dict(load_styles()["print"])
+    st = render(label, style, 0, 0, max_w=10**6)
+    if not st:
+        return []
+    k = px / style.get("size", 56)
+    x0 = min(p[0] for s in st for p in s)
+    y0, y1 = min(p[1] for s in st for p in s), max(p[1] for s in st for p in s)
+    top = base - 0.8 * px                  # ~cap height above the baseline
+    left = ax - k_anchor * (max(p[0] for s in st for p in s) - x0) * k
+    return visible_dots([[(int(left + (qx - x0) * k), int(top + (qy - y0) * k)) for qx, qy in s]
+                         for s in st]) if y1 > y0 else []
 
 
 def _densify(stroke: list, d: int = 4) -> list:

@@ -1,0 +1,46 @@
+#!/bin/sh
+# smriti-remote — bring the tailnet up for remote dev / external fetches,
+# independent of whether Smriti is armed.
+#
+#   smriti-remote on      set a hold + start tailscaled + reverse tunnel.
+#                         The hold keeps the tailnet up across arm/disarm
+#                         (smriti-eye-watch won't drop it) — for remote dev,
+#                         pulling external sources, or SSHing in.
+#   smriti-remote off     clear the hold + stop both. Back to automatic:
+#                         the tailnet then follows armed + internet only.
+#   smriti-remote status  up / down (+ hold)
+#
+# Normal Smriti use needs NONE of this: arming brings the tailnet up on its
+# own when the internet is live (see smriti-eye-watch). Use `on` only when you
+# want the tailnet without arming Smriti. Over USB (10.11.99.1) nothing here
+# is needed at all.
+#
+# NOTE: if you are connected TO the tablet over tailscale right now, `off`
+# will drop that connection — run it from the tablet UI/console, not the
+# remote ssh session you'd be killing.
+set -e
+HOLD=/home/root/.smriti/remote-hold
+mkdir -p /home/root/.smriti
+case "$1" in
+    on)
+        touch "$HOLD"
+        systemctl start tailscaled 2>/dev/null || true
+        systemctl start smriti-tunnel 2>/dev/null || true
+        echo "tailnet on (held)"
+        ;;
+    off)
+        rm -f "$HOLD"
+        systemctl stop smriti-tunnel 2>/dev/null || true
+        systemctl stop tailscaled 2>/dev/null || true
+        echo "tailnet off"
+        ;;
+    status)
+        if systemctl is-active --quiet tailscaled; then s=up; else s=down; fi
+        [ -f "$HOLD" ] && s="$s (held)"
+        echo "$s"
+        ;;
+    *)
+        echo "usage: smriti-remote on|off|status" >&2
+        exit 1
+        ;;
+esac

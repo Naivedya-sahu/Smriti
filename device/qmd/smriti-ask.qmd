@@ -1,0 +1,61 @@
+AFFECT [[3197972396468700595]]
+TRAVERSE ?#[[214642769434]]
+LOCATE AFTER ALL
+INSERT {
+Item {
+    id: smritiAskMenu
+    property bool smritiArmed: false
+    property var smritiArmedRequest: null
+    visible: smritiArmed && typeof sceneController !== "undefined"
+
+    function smritiReadArmed() {
+        if (!smritiArmedRequest) smritiArmedRequest = new XMLHttpRequest();
+        smritiArmedRequest.onreadystatechange = function() {
+            if (smritiArmedRequest.readyState === XMLHttpRequest.DONE)
+                smritiAskMenu.smritiArmed = smritiArmedRequest.responseText.indexOf("1") === 0;
+        };
+        smritiArmedRequest.open("GET", "file:///home/root/.smriti/armed");
+        smritiArmedRequest.send();
+    }
+
+    function smritiSend(action) {
+        // TODO(selection-rect): replace auto with the firmware's selected-item
+        // bounds after deploy/probe-selection.sh identifies the 3.27 property.
+        // Send before clearing: daemon screenshot fallback needs the marquee.
+        var request = new XMLHttpRequest();
+        request.open("PUT", "file:///home/root/.smriti/eye-cmd");
+        request.send("focus " + action + " auto scene");
+        sceneController.clearSelectedItems();
+        if (typeof documentViewTools !== "undefined")
+            documentViewTools.activeTool = "primary";
+    }
+
+    Component.onCompleted: smritiReadArmed()
+
+    Row {
+        spacing: 4
+        ~&425121728314878811&~.~&16765000136167945189&~.~&7081261925573&~ {
+            ~&214632764553&~: "Ask"
+            MouseArea { anchors.fill: parent; onClicked: smritiAskMenu.smritiSend("ask") }
+        }
+        ~&425121728314878811&~.~&16765000136167945189&~.~&7081261925573&~ {
+            ~&214632764553&~: "Solve"
+            MouseArea { anchors.fill: parent; onClicked: smritiAskMenu.smritiSend("solve") }
+        }
+        ~&425121728314878811&~.~&16765000136167945189&~.~&7081261925573&~ {
+            ~&214632764553&~: "Plot"
+            MouseArea { anchors.fill: parent; onClicked: smritiAskMenu.smritiSend("plot") }
+        }
+        ~&425121728314878811&~.~&16765000136167945189&~.~&7081261925573&~ {
+            ~&214632764553&~: "Draw"
+            MouseArea { anchors.fill: parent; onClicked: smritiAskMenu.smritiSend("draw") }
+        }
+        ~&425121728314878811&~.~&16765000136167945189&~.~&7081261925573&~ {
+            ~&214632764553&~: "Explain"
+            MouseArea { anchors.fill: parent; onClicked: smritiAskMenu.smritiSend("explain") }
+        }
+    }
+}
+}
+END TRAVERSE
+END AFFECT
