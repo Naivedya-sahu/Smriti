@@ -83,10 +83,20 @@ def to_screen(stroke, v: dict) -> list[tuple[int, int]]:
     # registered offset (ox, oy) when known: the view fields fail on a
     # scrolled page (device 22:30: y + top, x + 936 at right -468). Else the
     # unscrolled measurement: x - rightViewportEdge, y - topViewportEdge.
-    if "ox" in v:
-        return [(int(x + v["ox"]), int(y + v["oy"])) for x, y in stroke]
     s = float(v.get("scale") or 1)
+    if "ox" in v:
+        return [(int((x + v["ox"]) * s), int((y + v["oy"]) * s)) for x, y in stroke]
     return [(int((x - v["right"]) * s), int((y - v["top"]) * s)) for x, y in stroke]
+
+
+def to_page(stroke, v: dict) -> list[tuple[float, float]]:
+    """Screen pixels -> page coordinates, the scale-aware inverse of to_screen().
+    to_screen truncates to integer pixels, so page -> screen -> page is exact only
+    to within 1 screen px (1/scale page units); screen -> page -> screen is exact."""
+    s = float(v.get("scale") or 1)
+    if "ox" in v:
+        return [(x / s - v["ox"], y / s - v["oy"]) for x, y in stroke]
+    return [(x / s + v["right"], y / s + v["top"]) for x, y in stroke]
 
 
 def _shifts(page: np.ndarray, screen: np.ndarray, k: int) -> list[int]:

@@ -36,7 +36,7 @@ Return ONLY this one JSON object, no prose, no code fence:
  "latex": "LaTeX of any maths in the focus, no $ delimiters, else empty",
  "circuit": "components seen, with labels as written, else empty",
  "intent": "question|note|solve|plot|draw|write|refine",
- "target": "F, or the id of the <page> region the writing is about",
+ "target": "F, an R id from <regions>, or the id of the <page> region the writing is about",
  "target_kind": "kind of the target region, when target is not F",
  "target_desc": "what the target region contains, exactly enough to redraw it",
  "summary": "one short line: what the writer wants"}

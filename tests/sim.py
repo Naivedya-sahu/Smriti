@@ -93,6 +93,7 @@ class Sim:
         self.navy = {"color": "navy", "thick": 2, "layer": "Layer 1"}
         self.pen = dict(self.navy)   # tool state xochitl holds right now
         self.sel = []
+        self.selection_probe = True
         self.steps, self.i, self.armed, self.last_act = [], 0, None, self.clock.now
         self.pending = []            # Navy strokes not yet on the page: (t, stroke dict)
         self.unread, self.writes, self.replies = [], [], []
@@ -145,6 +146,12 @@ class Sim:
         for d in old:
             d["t"] -= 100
         return old
+
+    def lasso(self, box):
+        """Navy's live lasso: selection persists until Navy dismisses it."""
+        x0, y0, x1, y1 = box
+        self.sel = [d for d in self.ink if not d["dead"] and d["who"] == "navy"
+                    and all(x0 <= px <= x1 and y0 <= py <= y1 for px, py in d["pts"])]
 
     def hover(self, seconds):
         self.hover_until = self.clock.now + seconds
@@ -313,6 +320,13 @@ class Sim:
         if "clearSelectedItems" in js:
             self.sel = []
             return "1"
+        if self.selection_probe and "sceneController.boundingRect" in js:
+            pts = [(x - OX, y) for d in self.sel for x, y in d["pts"]]
+            if not pts:
+                return "[0,0,0,0]"
+            x0, y0 = min(x for x, _ in pts), min(y for _, y in pts)
+            x1, y1 = max(x for x, _ in pts), max(y for _, y in pts)
+            return json.dumps([x0, y0, x1 - x0 + 1, y1 - y0 + 1])
         if "selectionItemCount" in js:
             return str(len(self.sel))
         return "1"
@@ -580,6 +594,55 @@ PROSE2 = "Second answer. The curve below shows the same thing in red."
 PROSE3 = "Third answer, written lower on the page than the others."
 
 
+def _seg(x0, y0, x1, y1, n=10):
+    return [(x0 + (x1 - x0) * i / (n - 1), y0 + (y1 - y0) * i / (n - 1)) for i in range(n)]
+
+
+def _circuit(x, y, w=400, h=260):
+    zig = [(x + .35 * w + .3 * w * i / 12, y + (15 if i % 2 else -15)) for i in range(13)]
+    return [_seg(x, y, x + .35 * w, y), zig, _seg(x + .65 * w, y, x + w, y),
+            _seg(x + w, y, x + w, y + h), _seg(x + w, y + h, x, y + h),
+            _seg(x, y + h, x, y + .6 * h), _seg(x - 25, y + .6 * h, x + 25, y + .6 * h),
+            _seg(x - 12, y + .5 * h, x + 12, y + .5 * h), _seg(x, y + .5 * h, x, y)]
+
+
+def _graph(x, y, w=420, h=300):
+    curve = [(x + 20 + t, y + h / 2 - .4 * h * np.sin(t / (w - 40) * 2 * np.pi))
+             for t in range(0, w - 40, 10)]
+    return [_seg(x, y + h, x + w, y + h), _seg(x, y, x, y + h), curve]
+
+
+def circuit_in_this_area(s):
+    """A nearby phrase resolves the Navy circuit, not the separate graph."""
+    s.sketch(_circuit(120, 300) + _graph(800, 280))
+    old = s._put("monke", _seg(800, 1000, 1000, 1000), layer=layers.MONKE, color=0, w=4)
+    old["t"] -= 100                         # a flushed old reply: screen x 800 = page x 98
+    s.replies += ["The circuit is a closed current path."]
+    s.at(None, 1, s.tap)
+    s.at("watching", 3, lambda: s.write("explain the circuit in this area", y=680))
+
+    def check():
+        def text(msgs):
+            content = msgs[-1]["content"]
+            return content[0]["text"] if isinstance(content, list) else content
+        prompts = {role: text(msgs) for role, msgs in s.prompts if role in ("read", "write")}
+        out = []
+        circuit = re.search(r'<r id="(R\d+)" kind="circuit" owner="navy"', prompts.get("read", ""))
+        if circuit is None:
+            out.append("REGIONS: reader prompt lacks the Navy circuit")
+            return out
+        rid = circuit[1]
+        for role in ("read", "write"):
+            if "<regions>" not in prompts.get(role, "") or f'id="{rid}"' not in prompts.get(role, ""):
+                out.append(f"REGIONS: {role} prompt lacks <regions> circuit {rid}")
+        if 'owner="monke" box="98,' not in prompts.get("read", ""):
+            out.append("REGIONS: Monke screen box was not converted to page coordinates")
+        if f'Target region: <r id="{rid}"' not in prompts.get("write", ""):
+            out.append(f"REGIONS: turn target is not {rid}")
+        return out
+    s.checks.append(check)
+
+
 def basic(s):
     """Tap, greeting, one question, one prose + equation reply."""
     s.replies += [PROSE + "\n$$X(\\omega) = \\int x(t) e^{-j \\omega t} dt$$"]
@@ -656,6 +719,82 @@ def scroll_between_parts(s):
     s.at("watching", 3, lambda: s.write("Draw two graphs."))
     s.at("first part inking", 4.2, lambda: s.scroll(500))
     s.at("ready", 4, lambda: s.write("What happened?"))
+
+
+def _parts(s, box=False):
+    """Monke's live reply strokes grouped into streamed parts (a part's lamp
+    batches follow each other within 1 s; parts are >= 1.5 s apart)."""
+    ink = sorted((k for k in s.ink if k["who"] == "monke" and not k["dead"]
+                  and k["layer"] != layers.GREET), key=lambda k: k["t"])
+    parts = []
+    for k in ink:
+        if parts and k["t"] - parts[-1][-1]["t"] < 1.0:
+            parts[-1].append(k)
+        else:
+            parts.append([k])
+    return [(min(y for k in p for _, y in k["pts"]), max(y for k in p for _, y in k["pts"]),
+             min(x for k in p for x, _ in k["pts"])) for p in parts] if not box else \
+        [_box(p) for p in parts]
+
+
+def _box(ink):
+    """(x0, y0, x1, y1) page box of drawn strokes."""
+    pts = [p for k in ink for p in k["pts"]]
+    return (min(x for x, _ in pts), min(y for _, y in pts), max(x for x, _ in pts), max(y for _, y in pts))
+
+
+GAPS = {(0, 1): 61, (1, 3): 56}   # page px between parts as planned (no scroll): prose->graph, graph->Done.
+
+
+def scroll_mid_reply_rebased(s):
+    """Navy scrolls 800 between parts; the rest inks at its rebased page spot."""
+    s.replies += [PROSE + "\n" + GRAPH % "black" + "\n" + GRAPH % "blue" + "\nDone."]
+    s.at(None, 1, s.tap)
+    note = {}
+    s.at("watching", 3, lambda: note.update(rec=s.write("Draw two graphs.", y=1000)))
+    s.at("first part inking", 4.2, lambda: s.scroll(800))
+
+    def check():
+        p = _parts(s)                   # prose, black graph, blue graph (beside), Done.
+        if len(p) != 4:
+            return [f"REBASE: {len(p)} parts inked, want 4: {p}"]
+        qx0, qy0, qx1, qy1 = _box(note["rec"]["ink"])
+        out = [f"REBASE: part {i + 1} {b} overlaps the question {qx0, qy0, qx1, qy1} (page)"
+               for i, b in enumerate(_parts(s, box=True))
+               if b[0] <= qx1 and qx0 <= b[2] and b[1] <= qy1 and qy0 <= b[3]]
+        for (a, b), gap in GAPS.items():
+            if abs(p[b][0] - p[a][1] - gap) > 5:
+                out.append(f"REBASE: part {b + 1} starts {p[b][0] - p[a][1]} px under part {a + 1} "
+                           f"(page y), want {gap} ± 5")
+        if p[2][0] != p[1][0] or p[2][2] <= p[1][2]:
+            out.append(f"REBASE: blue graph not beside the black one: {p[1]} {p[2]}")
+        return out
+    s.checks.append(check)
+
+
+def scroll_mid_reply_new_ink(s):
+    """Navy writes into the next part's band between parts: it and the rest move under his ink."""
+    s.replies += [PROSE + "\n" + GRAPH % "black" + "\n" + GRAPH % "blue" + "\nDone."]
+    s.at(None, 1, s.tap)
+    s.at("watching", 3, lambda: s.write("Draw two graphs."))
+    note = {}
+    s.at("first part inking", 3.5, lambda: note.update(rec=s.write("ok", y=s.floor() + 25)))
+
+    def check():
+        p = _parts(s)                   # 'ok' is read as a question too: its answer is part 5
+        if len(p) < 4 or "rec" not in note:
+            return [f"REBASE INK: {len(p)} parts inked, want 4+: {p}"]
+        low = max(y for k in note["rec"]["ink"] for _, y in k["pts"])
+        out = []
+        if not p[0][1] < low:
+            out.append(f"REBASE INK: Navy's word (to y {low}) is not under part 1 {p[0]}")
+        if abs(p[1][0] - low - 40) > 5:
+            out.append(f"REBASE INK: part 2 starts {p[1][0] - low} px under Navy's word, want 40 ± 5")
+        if abs(p[3][0] - p[1][1] - GAPS[1, 3]) > 5:
+            out.append(f"REBASE INK: part 4 starts {p[3][0] - p[1][1]} px under part 2, "
+                       f"want {GAPS[1, 3]} ± 5")
+        return out
+    s.checks.append(check)
 
 
 def scroll_before_reply(s):
@@ -875,13 +1014,76 @@ def lasso_ask(s):
     s.checks.append(check)
 
 
+def selection_grounded_ask(s):
+    """A live lasso on a scrolled page grounds both models; the reply lands below it."""
+    box = (100, 880, 560, 1240)                     # page coords
+    s.sketch(_graph(120, 900))
+    s.lasso(box)
+    s.replies.append("The selected graph has axes and one sine curve.")
+    s.at(None, 1, s.tap)
+    s.at("watching", 3, lambda: s.scroll(600))      # the graph now shows at screen y 300-600
+    # beside the box, not below it: only the selection's box puts the reply under the graph
+    s.at(None, 3, lambda: s.write("what is this", x=620, y=360))
+    s.at(None, 0, lambda: s.hover(14))              # pen hovers: the page file catches up
+
+    def check():
+        def text(msgs):
+            content = msgs[-1]["content"]
+            return content[0]["text"] if isinstance(content, list) else content
+        prompts = {role: text(msgs) for role, msgs in s.prompts if role in ("read", "write")}
+        out = []
+        for role in ("read", "write"):
+            if "<selection" not in prompts.get(role, ""):
+                out.append(f"SELECTION: {role} prompt lacks <selection>")
+        if "Target selection" not in prompts.get("write", ""):
+            out.append("SELECTION: writer target is not selection")
+        pts = [p for d in s.sel for p in d["pts"]]  # screen box = page box + registered offset
+        want = (min(x for x, _ in pts), min(y for _, y in pts) - s.top,
+                max(x for x, _ in pts) + 1, max(y for _, y in pts) + 1 - s.top)
+        logged = [tuple(map(int, m.groups())) for _, ln in s.log if (m := re.search(
+            r"\[selection\] \d+ items box=\((-?\d+), (-?\d+), (-?\d+), (-?\d+)\) via boundingRect", ln))]
+        if not logged or any(abs(a - b) > 2 for a, b in zip(logged[0], want)):
+            out.append(f"SELECTION: [selection] box {logged[:1]} is not the lasso's screen box {want}")
+        reply = [y for d in s.ink if d["who"] == "monke" and d["layer"] == layers.MONKE
+                 and not d["dead"] for _, y in d["pts"]]
+        if not reply or min(reply) <= box[3]:
+            out.append("SELECTION: reply was not below the lasso box")
+        if not s.sel:
+            out.append("SELECTION: Monke cleared Navy's lasso")
+        return out
+    s.checks.append(check)
+
+
+def selection_probe_unknown(s):
+    """An unknown bounds property falls back to ordinary prompt behavior."""
+    s.sketch(_graph(120, 300))
+    s.lasso((100, 280, 560, 640))
+    s.selection_probe = False
+    s.replies.append("Fallback answer.")
+    s.at(None, 1, s.tap)
+    s.at("watching", 3, lambda: s.write("what is this", y=700))
+
+    def check():
+        def text(msgs):
+            content = msgs[-1]["content"]
+            return content[0]["text"] if isinstance(content, list) else content
+        prompts = {role: text(msgs) for role, msgs in s.prompts if role in ("read", "write")}
+        out = [f"UNKNOWN PROBE: {role} prompt changed" for role in ("read", "write")
+               if "<selection" in prompts.get(role, "")]
+        if not s.sel:
+            out.append("UNKNOWN PROBE: Monke cleared Navy's lasso")
+        return out
+    s.checks.append(check)
+
+
 SCENARIOS = [basic, three_turns, quick_followup, write_during_reply, graphs_side_by_side,
              scroll_between_turns, scroll_right_after_reply, scroll_during_reply, scroll_between_parts,
-             scroll_before_reply, hash_p,
+             scroll_mid_reply_rebased, scroll_mid_reply_new_ink, scroll_before_reply, hash_p,
              page_fills_up, stop_and_resume, hover_while_reply, writes_before_greeting_done,
              long_prompt, pause_mid_prompt, empty_reply, broken_drawing, stop_during_reply,
              refine_code_graph, refine_fallback, place_beside,
-             brain_fails, merged_turn, lasso_ask]
+             brain_fails, merged_turn, lasso_ask, circuit_in_this_area,
+             selection_grounded_ask, selection_probe_unknown]
 
 
 def main(argv):

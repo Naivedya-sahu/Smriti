@@ -21,7 +21,7 @@ import os
 import sys
 from pathlib import Path
 
-VERSION = "0.5.0"
+VERSION = "0.6.0"
 
 if not getattr(sys, "frozen", False):              # dev: host/ modules importable
     sys.path.insert(0, str(Path(__file__).resolve().parent))

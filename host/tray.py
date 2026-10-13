@@ -356,9 +356,10 @@ def main() -> int:
     )
     icon = pystray.Icon("Smriti", icon_image(), "Smriti", menu)
 
+    halt = threading.Event()                     # set when the tray loop ends -> watcher exits
+
     def watch():
-        while True:
-            time.sleep(3)
+        while not halt.wait(3):
             d.scan_log()
             if not state.get("key_warned") and d.log_path and d.log_path.exists():
                 try:
@@ -378,8 +379,13 @@ def main() -> int:
                 icon.update_menu()
             except Exception:                     # noqa: BLE001
                 pass
-    threading.Thread(target=watch, daemon=True).start()
-    if load_cfg().get("app", {}).get("start_daemon", True):
-        start()                                  # open the tray = Smriti ready, no extra click
-    icon.run()
+    watcher = threading.Thread(target=watch, daemon=True, name="smriti-tray-watch")
+    watcher.start()
+    try:
+        if load_cfg().get("app", {}).get("start_daemon", True):
+            start()                              # open the tray = Smriti ready, no extra click
+        icon.run()
+    finally:
+        halt.set()                               # no supervisor restarts once the tray is gone
+        watcher.join(timeout=5)
     return 0

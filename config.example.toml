@@ -29,6 +29,9 @@ safe_layer = true
 confirm = true
 greet_fade = true
 input_fade = true
+# page px a streamed reply may run down to; it waits scroll_wait s at the
+# screen bottom for your scroll. 0 = no end (a device page scrolled past 12000)
+page_height = 0
 
 [screen]
 # Resolver selects URL from [capture] endpoint; do not put a real tablet URL here.

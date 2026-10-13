@@ -1,6 +1,6 @@
 [project]
 name = "smriti"
-version = "0.5.0"
+version = "0.6.0"
 requires-python = ">=3.12"
 dependencies = [
     "numpy>=2.5.1",

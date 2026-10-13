@@ -35,6 +35,7 @@ import shlex
 import subprocess
 import time
 import tomllib
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
@@ -50,7 +51,10 @@ import harness
 import plan_schema
 import plan_stream
 import protocol
+import rebase
+import regions
 import render_plan
+import selection
 import skill
 import tablet
 import paths
@@ -274,6 +278,9 @@ def _ink(reply: list, pressure: int, step: int, host: str,
 
 STREAM = True          # [monke] stream: ink a Claude reply line by line as it arrives
 SCROLL_WAIT = 20       # [monke] scroll_wait: s a reply waits at the page bottom for Navy's scroll (0 = off)
+PAGE_HEIGHT = 0        # [monke] page_height: page px a reply may run down to (0 = no end; a device page scrolled past 12000)
+VERIFY_JITTER = 3      # px: a measured view shift this small is detection jitter, not a scroll
+REPLY_TOP = 150        # a part Navy scrolled past goes on at this screen row (xochitl's top UI row ends at 100)
 
 
 def _band_busy(shot, strokes: list, mine: list, pad: int = 10, min_px: int = 40) -> bool:
@@ -299,6 +306,48 @@ def _band_busy(shot, strokes: list, mine: list, pad: int = 10, min_px: int = 40)
 
 
 BESIDE_GAP = 40
+
+
+def _navy_ink(shot, vt, mine: list, cell: int = 16, min_px: int = 4) -> list:
+    """Ink that is not this reply's own, page coordinates, for rebase.rebase:
+    the screenshot's ink (minus `mine`) as one box per 16 px cell, plus the
+    page file's strokes on Navy's layers when x maps (vt.x_trusted: a
+    registered offset or an unscrolled page; the .rm lags ~10 s, the
+    screenshot doesn't). Run 16: Navy kept writing under his prompt while
+    the reply streamed; line 1 was inked over it."""
+    from PIL import Image as _I, ImageDraw as _D
+    from screen import stroke_mask
+    ink = stroke_mask(shot)
+    if mine:
+        own = _I.new("1", (CANVAS_W, CANVAS_H), 0)
+        d = _D.Draw(own)
+        for s in mine:
+            if len(s) > 1:
+                d.line(s, fill=1, width=12)
+        ink = ink & ~np.asarray(own, dtype=bool)
+    out = []
+    ys, xs = np.nonzero(ink)
+    if len(ys):
+        k = (ys // cell) * (CANVAS_W // cell + 1) + xs // cell
+        m = int(k.max()) + 1
+        x0, y0 = np.full(m, CANVAS_W), np.full(m, CANVAS_H)
+        x1, y1 = np.full(m, -1), np.full(m, -1)
+        np.minimum.at(x0, k, xs), np.minimum.at(y0, k, ys)
+        np.maximum.at(x1, k, xs), np.maximum.at(y1, k, ys)
+        out = [[vt.screen_to_page(x0[c], y0[c]), vt.screen_to_page(x1[c], y1[c])]
+               for c in np.nonzero(np.bincount(k) >= min_px)[0]]
+    layers = shot.info.get("layers") if vt.x_trusted else None
+    return out + [s for name, ss in (layers or {}).items() if name not in rebase.OWN for s in ss]
+
+
+def _seen(shot):
+    """Where the ink is on screen now: pixels only (no page-file overlay,
+    which lags and maps by the view fields)."""
+    from screen import stroke_mask
+    img = shot.copy()
+    img.info.pop("vectors", None)
+    img.info.pop("vectors_mask", None)
+    return stroke_mask(img)
 
 
 def _beside(row, strokes: list) -> list | None:
@@ -347,10 +396,11 @@ class _Streamer:
     """Ink a streamed reply unit by unit (a finished line, or a closed $$ /
     <svg> block) while the model is still writing: Navy 2026-09-30, 'should
     operate live'. One layer session for all units; verify once at the end.
-    Before the first unit: page guard, then the greeting fades. The view
-    moved (Navy scrolled) -> the reply goes on under the ink now visible.
-    No room -> wait SCROLL_WAIT s for his scroll, then the rest stays in
-    the log; never scales."""
+    Before the first unit: page guard, then the greeting fades. Each unit
+    is anchored in page coordinates (rebase.py): Navy scrolled -> it inks
+    at its page spot in the view now; his new ink in its band -> it goes
+    under that ink; past the screen bottom -> wait SCROLL_WAIT s for his
+    scroll, then the rest stays in the log; never scales."""
 
     def __init__(self, question, style, y, bottom, host, step, greet, log, fix,
                  regions=None, occ=None, floor=0, ses=None):
@@ -358,6 +408,7 @@ class _Streamer:
         self.host, self.step, self.greet, self.log, self.fix = host, step, greet, log, fix
         self.used, self.inked, self.ctx, self.w0, self.thin = 0, [], None, None, False
         self.started = self.blocked = self.stopped = False
+        self.partial = False     # pending unit has page-anchored strokes still to lamp
         self.row = None          # (right x, top y) of a drawing with room beside it
         self.moved = False       # re-anchored after a scroll: the old-spot page guard is void
         self.body = False        # past the reply's leading SPP directive lines
@@ -367,6 +418,10 @@ class _Streamer:
         # as it closes (plan_stream). None = not known yet, False = text grammar
         self.ses, self.plan, self.scan = ses, None, None
         self.taken0 = set(_graphs(ses)) if ses is not None else set()
+        # page <-> screen as of the question's frame (a registered #P offset wins)
+        self.v = _TURN.get("view") or {}
+        self.vt = rebase.ViewTransform.from_view(self.v, _TURN.get("offset"))
+        self.anchors = rebase.Plan(self.v.get("pageId"))   # the reply's parts, page coordinates
 
     def feed(self, text: str) -> None:
         if self.stopped:
@@ -456,15 +511,24 @@ class _Streamer:
     def _put(self, lay) -> list | None:
         """Place + ink one unit. lay(y, log) -> its strokes with top at y
         (called again when the spot moves). Returns the inked strokes."""
+        if self.stopped:
+            return None
         quiet = lambda *a: None                               # noqa: E731
-        strokes = lay(self.y, self.log)
+        todo = self.anchors.pending()
+        resuming = bool(todo and isinstance(todo[0][1].tag, dict)
+                        and "remaining" in todo[0][1].tag)
+        if resuming:
+            i, u = todo[0]
+            strokes = self._from_page(u.tag["remaining"])
+        else:
+            strokes = lay(self.y, self.log)
         if not strokes:
             return None
-        if self.column_x is not None:
+        if not resuming and self.column_x is not None:
             import place
             strokes = place.shift(strokes, self.column_x,
                                   min(py for s in strokes for _, py in s))
-        elif self.directive and self.occ is not None:
+        elif not resuming and self.directive and self.occ is not None:
             moved, spot = _directive_place(strokes, self.directive, self.regions,
                                            self.occ, self.floor, self.bottom)
             if moved is not None and spot is not None:
@@ -473,98 +537,215 @@ class _Streamer:
             else:
                 print("[place] directive had no safe spot — normal placement", flush=True)
             self.directive = None
-        beside = _beside(self.row, strokes)
+        beside = None if resuming else _beside(self.row, strokes)
         if beside:
             strokes = beside
-        shot = _shot()                    # ~0.5 s per unit: the band must still be empty
-        ref = self.inked or self.q        # what a scroll would move: the reply so far, else the question
-        if shot is not None and ref and _moved(*_missing(ref, shot)):
-            # sim 2026-10-04: a scroll between parts put the next part at the
-            # old screen spot and the final check re-inked the earlier ones
-            if not self._reanchor():
+        shot = _shot()                    # ~0.5 s per unit: where the view is, what is in the way
+        ink = []
+        if shot is not None:
+            ox, oy, y = self.vt.ox, self.vt.oy, self.y
+            if not self._follow(shot):
                 return None
-            strokes, beside = lay(ink_floor(shot) + 50, quiet), None
-            if not strokes:
+            if (self.vt.ox, self.vt.oy) != (ox, oy):
+                # sim 2026-10-04: a scroll between parts put the next part at
+                # the old screen spot; same page spot, new screen spot now
+                strokes = self._view_delta(strokes, ox, oy)
+            elif self.y != y:             # re-anchored under the ink now on screen
+                strokes, beside = lay(self.y, quiet), None
+                if not strokes:
+                    return None
+            ink = _navy_ink(shot, self.vt, self.inked)
+            v = shot.info.get("view")     # read by the page-file overlay just now
+            if v and v.get("pageId") != self.anchors.page_id:
+                self._stop_page()
                 return None
-        if shot is not None and _band_busy(shot, strokes, self.inked):
-            y = max(self.y, ink_floor(shot) + 50)
-            print(f"[stream] new ink in the way — part moved to y {y}", flush=True)
-            strokes, beside = lay(y, quiet), None
-            if not strokes:
-                return None
-        if max(py for s in strokes for _, py in s) > self.bottom:
+        if not resuming:
+            i = len(self.anchors.units)
+            self.anchors.units += rebase.Plan.from_screen(self.anchors.page_id, [_box(strokes)],
+                                                          self.vt).units
+        strokes, moved = self._rebase(strokes, ink)
+        if moved:
+            beside = None
+            print(f"[stream] part moved to y {_box(strokes)[1]} — new ink in the way, "
+                  "or scrolled past its spot", flush=True)
+        c = rebase.continuation(self.anchors, self.vt, PAGE_HEIGHT or float("inf"),
+                                CANVAS_H - self.bottom, screen_top=REPLY_TOP)
+        if c.decision == "wait_for_scroll":
             # injected swipes/drags do NOT scroll xochitl (run 13) — Navy scrolls
-            strokes, beside = self._await_scroll(lay), None
-            if not strokes:
-                print("[stream] no room for the next part — rest in the log", flush=True)
+            strokes, beside = self._await_scroll(strokes), None
+            c = rebase.continuation(self.anchors, self.vt, PAGE_HEIGHT or float("inf"),
+                                    CANVAS_H - self.bottom, screen_top=REPLY_TOP)
+        if self.stopped:
+            return None
+        if c.decision != "ink_now" or not strokes:
+            print(f"[stream] no room for the next part ({c.reason or 'no scroll came'}) "
+                  "— rest in the log", flush=True)
+            if not resuming or c.decision != "wait_for_scroll":
                 self.stopped = True
-                return None
+            return None
         if not self.started and not self._start():
             return None
         pressure = self.style.get("pressure", 2400)
-        for thin in (False, True):
-            part = [s for s in strokes if isinstance(s, Drawn) == thin]
-            for c in sorted({getattr(s, "color", MONKE_COLOR) for s in part}):
-                self._pen(thin)
-                if c != MONKE_COLOR and SAFE_LAYER:
-                    pen_color(self.host, c)
-                lamp(to_lamp([s for s in part if getattr(s, "color", MONKE_COLOR) == c],
-                             pressure, self.step), self.host)
-                if c != MONKE_COLOR and SAFE_LAYER:
-                    pen_color(self.host, MONKE_COLOR)
-        self.inked += strokes
+        grouped = {}
+        for s in strokes:
+            grouped.setdefault((isinstance(s, Drawn), getattr(s, "color", MONKE_COLOR)), []).append(s)
+        batches = [(thin, c, grouped[thin, c]) for thin in (False, True)
+                   for c in sorted(c for t, c in grouped if t == thin)]
+        kept, dropped = [], []
+        for k, (thin, c, batch) in enumerate(batches):
+            self._pen(thin)
+            if c != MONKE_COLOR and SAFE_LAYER:
+                pen_color(self.host, c)
+            if k:                         # sim page_fills_up: a scroll between the frame and
+                shot = _shot()            # the curve inked the curve 500 px under its frame
+                oy, ox = self.vt.oy, self.vt.ox
+                if shot is not None and not self._follow(shot):
+                    return None
+                if (self.vt.oy, self.vt.ox) != (oy, ox):
+                    batches = [(t, colour, self._view_delta(ss, ox, oy))
+                               for t, colour, ss in batches]
+                    batch = batches[k][2]
+                    kept = self._view_delta(kept, ox, oy)
+            visible = [s for s in batch if all(0 <= y < CANVAS_H for _, y in s)]
+            kept += visible
+            dropped += [s for s in batch if s not in visible]
+            if visible:
+                lamp(to_lamp(visible, pressure, self.step), self.host)
+                _echo_mark(visible)       # its pen echo arrives at these screen spots
+            if c != MONKE_COLOR and SAFE_LAYER:
+                pen_color(self.host, MONKE_COLOR)
+        strokes = [s for _, _, batch in batches for s in batch]
+        if dropped:                        # a scroll between batches pushed them off the screen
+            print(f"[stream] {len(dropped)} strokes off the screen after a scroll — "
+                  f"not inked, part {i + 1} only partly inked", flush=True)
+            # Retry only page-anchored missing strokes: already-lamped strokes
+            # remain echo-tracked and must never be inked twice.
+            remaining = self._to_page(dropped)
+            u = self.anchors.units[i]
+            u.x, u.y, u.w, u.h = _box(remaining)
+            u.tag = {"remaining": remaining}
+            self.partial = True
+        else:
+            self.anchors.mark_done(i)
+            self.partial = False
+        self.inked += kept
         low = max(py for s in strokes for _, py in s) + 40
         drawing = all(isinstance(s, Drawn) for s in strokes)
         self.row = (None if beside or not drawing else
                     (max(px for s in strokes for px, _ in s), min(py for s in strokes for _, py in s)))
         self.y = max(self.y, low) if beside else low
-        return strokes
+        return None if dropped else strokes
 
-    def _reanchor(self) -> bool:
-        """The view moved under the reply. Same page (a scroll) -> forget the
-        old screen spots and go on; another page, or unknown -> stop."""
+    def _view_delta(self, strokes, ox, oy):
+        """Move screen strokes by this transform's page-offset change."""
+        return _at(strokes, round((self.vt.oy - oy) * self.vt.scale),
+                   round((self.vt.ox - ox) * self.vt.scale))
+
+    def _to_page(self, strokes):
+        return [type(s)([self.vt.screen_to_page(x, y) for x, y in s], getattr(s, "color", 0))
+                if isinstance(s, (Drawn, Tinted)) else
+                [self.vt.screen_to_page(x, y) for x, y in s] for s in strokes]
+
+    def _from_page(self, strokes):
+        return [type(s)(self.vt.stroke_to_screen(s), getattr(s, "color", 0))
+                if isinstance(s, (Drawn, Tinted)) else self.vt.stroke_to_screen(s) for s in strokes]
+
+    def _rebase(self, strokes: list, ink: list) -> tuple[list, bool]:
+        """The pending part at its spot in the view now: rebase.rebase pulls
+        it into view when Navy scrolled past it and puts it under his new
+        ink. (strokes moved there, moved?)"""
+        r = rebase.rebase(self.anchors, self.vt, self.vt, ink, bottom=self.bottom, top=REPLY_TOP)
+        if r.abort or not r.units:
+            return strokes, False
+        self.anchors = r.plan
+        x, y = r.units[0].screen[:2]
+        bx, by = _box(strokes)[:2]
+        return (_at(strokes, y - by, x - bx), True) if (x, y) != (bx, by) else (strokes, False)
+
+    def _follow(self, shot) -> bool:
+        """Track the view under the reply: where did the ink Monke expects on
+        screen (the reply so far, else the question) go? A scroll moves vt
+        and every screen spot kept here; offset unknown (a long scroll, too
+        little ink left on screen) -> the view fields, else the reply goes
+        on under the ink now on screen. Another page -> stop (never ink onto
+        another page). False = stopped."""
         import vectors
-        v0, v = _TURN.get("view"), vectors.view(self.host)
-        if not v0 or not v or v.get("pageId") != v0.get("pageId"):
-            print("[stream] the page changed during the reply — rest in the log "
-                  "(content safety)", flush=True)
-            self.stopped = True
-            self.blocked = not self.started
-            return False
-        _echo_mark(self.inked)                 # their pen echo still arrives at the old spots
-        self.inked, self.row, self.moved = [], None, True
-        print("[stream] Navy scrolled — the reply goes on under the ink now on screen", flush=True)
+        ref = self.inked or self.q
+        if not ref:
+            return True
+        from screen import UI_BOXES
+        pts, mask = [p for s in ref for p in s], _seen(shot)
+        seen = rebase.detect_view_moved(pts, mask, blind=UI_BOXES)
+        if not seen[0]:
+            return True
+        v = vectors.view(self.host)
+        if rebase.page_turn(self.anchors, v).abort:
+            return self._stop_page()
+        d = rebase.view_shift(seen, self.v, v, pts, mask, blind=UI_BOXES)
+        self.moved, self.v = True, v          # (each part's pen echo was marked at its old spot)
+        if d is None:
+            # offset unknown: x no longer maps (no page-file ink), and the old
+            # screen spots are stale (every _await_scroll poll re-anchored again)
+            self.vt = replace(self.vt, x_trusted=False)
+            self.inked, self.q, self.row, self.y = [], [], None, ink_floor(shot) + 50
+            todo = self.anchors.pending()
+            if todo:                           # the waiting part goes there too
+                dy = self.vt.screen_to_page(0, self.y)[1] - todo[0][1].y
+                for _, u in todo:
+                    u.y += dy
+            print("[stream] Navy scrolled — the reply goes on under the ink now on screen",
+                  flush=True)
+            return True
+        dy, dx = d
+        self.vt = replace(self.vt, ox=self.vt.ox + dx / self.vt.scale,
+                          oy=self.vt.oy + dy / self.vt.scale)
+        self.inked, self.q = _at(self.inked, dy, dx), _at(self.q or [], dy, dx)
+        self.y += dy
+        if self.row:
+            self.row = (self.row[0] + dx, self.row[1] + dy)
+        print(f"[stream] Navy scrolled {-dy:+d} px — the reply goes on at its page spot", flush=True)
         return True
 
-    def _await_scroll(self, lay) -> list | None:
-        """Page bottom reached: give Navy SCROLL_WAIT s to scroll, then lay
-        the unit out under the ink now visible (roadmap: scroll to complete
-        a reply; run 12 'no room' with the page below empty). None = no
-        scroll came, or still no room."""
-        ref = self.inked or self.q
-        if not ref or not SCROLL_WAIT:
+    def _stop_page(self) -> bool:
+        print("[stream] the page changed during the reply — rest in the log "
+              "(content safety)", flush=True)
+        self.stopped = True
+        self.blocked = not self.started
+        return False
+
+    def _await_scroll(self, strokes: list) -> list | None:
+        """Past the screen bottom: give Navy SCROLL_WAIT s to scroll (roadmap:
+        scroll to complete a reply; run 12 'no room' with the page below
+        empty). The part keeps its page spot and inks once the view has
+        settled with it on screen. None = no scroll came, or still no room."""
+        if not SCROLL_WAIT:
             return None
         print(f"[stream] page bottom — scroll down and the reply goes on (waiting {SCROLL_WAIT} s)",
               flush=True)
-        end, moved, last = time.time() + SCROLL_WAIT, False, None
+        end, last, still = time.time() + SCROLL_WAIT, None, 0
         while time.time() < end:
             time.sleep(1.0)
             shot = _shot()
             if shot is None:
                 continue
-            if not moved:
-                if not _moved(*_missing(ref, shot)):
-                    continue
-                if not self._reanchor():
-                    return None
-                moved = True
-            floor, last = ink_floor(shot), ink_floor(shot) if last is None else last
-            if abs(floor - last) > 3:          # still scrolling: wait for the view to settle
-                last = floor
+            ox, oy = self.vt.ox, self.vt.oy
+            if not self._follow(shot):
+                return None
+            strokes = self._view_delta(strokes, ox, oy)
+            here = (self.vt.ox, self.vt.oy, self.y)
+            # sim page_fills_up: a hand scrolls in swipes ~1.5 s apart; inking
+            # after 1 s still split a graph (frame before, curve after swipe 2)
+            still = still + 1 if here == last else 0
+            if still < 2:                      # still scrolling: wait for the view to settle
+                last = here
                 continue
-            strokes = lay(floor + 50, lambda *a: None)
-            if strokes and max(py for s in strokes for _, py in s) <= self.bottom:
+            strokes, _ = self._rebase(strokes, _navy_ink(shot, self.vt, self.inked))
+            c = rebase.continuation(self.anchors, self.vt, PAGE_HEIGHT or float("inf"),
+                                    CANVAS_H - self.bottom, screen_top=REPLY_TOP)
+            if c.decision == "ink_now":
                 return strokes
+            if c.decision != "wait_for_scroll":
+                return None
         return None
 
     def finish(self, text: str) -> int:
@@ -584,6 +765,8 @@ class _Streamer:
                 pressure = self.style.get("pressure", 2400)
                 time.sleep(1.0)                  # one e-ink wait + one frame
                 shot = _shot()
+                if shot is not None and not self._follow(shot):
+                    shot = None                  # another page: nothing to check here
                 for thin in (True, False):       # current pen first: fewer switches
                     part = [s for s in self.inked if isinstance(s, Drawn) == thin]
                     if part:
@@ -592,8 +775,6 @@ class _Streamer:
         finally:
             if self.ctx is not None:
                 self.ctx.__exit__(None, None, None)
-            if self.inked:
-                _echo_mark(self.inked)
         return self.y - 40 if self.inked else self.y
 
 
@@ -683,12 +864,6 @@ def _missing(strokes: list, shot) -> tuple[list, int]:
     return missing, checked
 
 
-def _moved(missing: list, checked: int) -> bool:
-    """Nearly every stroke gone from where it was inked = the view moved
-    (scroll, page turn), not a render miss."""
-    return len(missing) >= max(2, 0.8 * checked)
-
-
 def _verify_ink(strokes: list, host: str, pressure: int, step: int,
                 shot=None) -> None:
     """Render check (Navy 2026-09-26: 'the model is not aware of what got
@@ -702,12 +877,22 @@ def _verify_ink(strokes: list, host: str, pressure: int, step: int,
     if shot is None or not strokes:
         return
     missing, checked = _missing(strokes, shot)
-    if _moved(missing, checked):
+    if missing:
         # sim 2026-10-04: a scroll during the e-ink wait = 94/94 'missing', and
         # the whole reply was inked a second time at the old screen spot
-        print(f"[verify] {len(missing)}/{checked} strokes not where they were inked — "
-              "the view moved, nothing redrawn", flush=True)
-    elif missing:
+        from screen import UI_BOXES
+        pts, mask = [p for s in strokes for p in s], _seen(shot)
+        d = rebase.view_shift(rebase.detect_view_moved(pts, mask, blind=UI_BOXES), None, None,
+                              pts, mask, blind=UI_BOXES)
+        # sim page_fills_up: a scroll between colour batches of one graph left
+        # the frame at the old page spot; redrawing it at the shifted spot
+        # made a duplicate frame + an orphan. Any move = nothing redrawn;
+        # <= VERIFY_JITTER px is detection jitter: a real miss, redrawn.
+        if d is None or max(abs(d[0]), abs(d[1])) > VERIFY_JITTER:
+            print(f"[verify] {len(missing)}/{checked} strokes not where they were inked — "
+                  "the view moved, nothing redrawn", flush=True)
+            return
+    if missing:
         print(f"[verify] {len(missing)}/{checked} strokes missing on screen — redrawing",
               flush=True)
         lamp(to_lamp(missing, pressure, step), host)
@@ -1282,6 +1467,11 @@ def _resolve_link(cfg: dict, wait: float = 0) -> str:
 
 def run() -> None:
     global _TURN_STATE, _STATUS_HOST
+    selection.reset_cache()                     # probe results last one daemon session
+    _TURN.clear()
+    _TURN.update(view=None)
+    _PAGE.clear()
+    _PAGE.update(id=None)
     _detach_stdin()
     cfg = _load_cfg()
     host = _resolve_link(cfg, wait=float(cfg.get("capture", {}).get("link_wait_seconds", 24 * 3600)))
@@ -1307,8 +1497,9 @@ def run() -> None:
     input_fade = m.get("input_fade", False)  # also erase the user's input at
                                              # reply time — frees space, reply
                                              # lands where the question was
-    global MARKER_INK, SAFE_LAYER, VERIFY, STREAM, SCROLL_WAIT
+    global MARKER_INK, SAFE_LAYER, VERIFY, STREAM, SCROLL_WAIT, PAGE_HEIGHT
     SCROLL_WAIT = m.get("scroll_wait", SCROLL_WAIT)
+    PAGE_HEIGHT = m.get("page_height", PAGE_HEIGHT)
     MARKER_INK = m.get("marker_ink", False)
     SAFE_LAYER = m.get("safe_layer", True)
     VERIFY = m.get("verify", True)
@@ -2301,7 +2492,7 @@ def _page_turns(ses) -> list[tuple[str, str]]:
             if pg == cur]
 
 
-def _monke_regions(ses, shot) -> list[dict]:
+def _monke_regions(ses, shot, view=None) -> list[dict]:
     """Monke's own regions for the <page> map (protocol.page_map). Where = the
     Monke layer of the page file: ownership comes from the layer. What = the
     session: graphs keep their label and curves (ses.graphs); the other
@@ -2319,7 +2510,8 @@ def _monke_regions(ses, shot) -> list[dict]:
             x0, y0, x1, y1 = harness.strokes_box(graph.strokes(g))
             out.append({"id": label, "type": "graph", "box": (x0, y0, x1 + 1, y1 + 1),
                         "text": ", ".join(f"y = {c}" for c in g.curves) + f", x {g.xmin:g}..{g.xmax:g}"})
-    v, ink = shot.info.get("view"), (shot.info.get("layers") or {}).get(layers.MONKE) or []
+    v = view if view is not None else shot.info.get("view")
+    ink = (shot.info.get("layers") or {}).get(layers.MONKE) or []
     boxes = sorted((b for b, _ in _pen_boxes([vectors.to_screen(s, v) for s in ink] if v else [], 60)
                     if not any(_near(b, m["box"], 0) for m in out)), key=lambda b: (b[1], b[0]))
     replies = [body for who, body in _page_turns(ses) if who == "Monke"]
@@ -2332,12 +2524,13 @@ def _monke_regions(ses, shot) -> list[dict]:
     return out
 
 
-def _spp_directives(text: str, page: str) -> str:
+def _spp_directives(text: str, page: str, semantic=None) -> str:
     """The reply without its leading SPP directive lines, which are logged,
     never inked."""
     found, body = protocol.parse_directives(text)
     if found:
         known = set(re.findall(r'<region id="(\w+)"', page or ""))
+        known |= set(regions.boxes(semantic or []))
         say = lambda d: (d.get("raw") or " ".join(filter(None, (
             d["op"], d.get("how"), d.get("id"), d.get("as") and f"as {d['as']}")))) + (
             f" (unknown id {d['id']}, ignored)" if d.get("id") and d["id"] not in known else "")
@@ -2356,7 +2549,7 @@ def graphs_context(ses) -> str:
 
 
 def _refine(reading: dict, page: str, shot, ses, host: str, step: int,
-            floor: int, bottom: int, occ=None) -> int | None:
+            floor: int, bottom: int, occ=None, view=None) -> int | None:
     """Beautify target vectors without a writer call; None means model fallback."""
     import beautify
     import place
@@ -2371,7 +2564,6 @@ def _refine(reading: dict, page: str, shot, ses, host: str, step: int,
     if target is None:
         print(f"[refine] fallback: target {rid} missing", flush=True)
         return None
-    view = shot.info.get("view") if shot is not None else None
     page_layers = shot.info.get("layers") if shot is not None else None
     source = protocol.region_strokes(view, page_layers, target)
     if not source:
@@ -2608,6 +2800,26 @@ def _prompt_offset(prompt: list, layers: dict, tol: int = 6):
     return None
 
 
+def _turn_offset(strokes, layers):
+    """This turn's registered (ox, oy) from the question's own strokes, or
+    None (no strokes, or not all in the page file yet: it lags ~10 s). On
+    a scrolled page x maps only with it (rebase.ViewTransform.x_trusted)."""
+    return _prompt_offset(strokes, layers) if strokes and layers else None
+
+
+def _turn_start(shot, strokes, host: str) -> None:
+    """This turn's live view and registered #P offset, from the question's frame."""
+    view = shot.info.get("view") if shot is not None else None
+    pid = view.get("pageId") if view else None
+    if _TURN.get("regions_page") != pid:
+        _TURN.update(regions=[], regions_page=pid, region_turn=0)
+    offset = _turn_offset(strokes, shot.info.get("layers")) if shot is not None else None
+    region_view = dict(view) if view else None
+    if region_view and offset:
+        region_view["ox"], region_view["oy"] = offset
+    _TURN.update(view=view, region_view=region_view, host=host, offset=offset)
+
+
 def erase_prompt(strokes: list, host: str, pad: int = 10, wait: float = 15.0) -> bool:
     """Delete a #P prompt's own strokes once answered (Navy 2026-09-30, like
     the greeting fade) — only strokes registered as the prompt. One box
@@ -2782,6 +2994,7 @@ def _reply(strokes, style, step, bottom, host, history, floor,
     png, shot = _page_context(strokes, shot, hide=greet)
     ctx = " ".join(m["content"] for m in history[-4:]
                    if isinstance(m.get("content"), str))
+    shot_info = getattr(shot, "info", {}) if shot is not None else {}
     if text_in:
         ctx += f" (line-OCR guess of the new writing: {text_in})"
     if graphs_context(ses):
@@ -2796,20 +3009,56 @@ def _reply(strokes, style, step, bottom, host, history, floor,
         occ = place.occupancy(mask)
         free = place.free_rects(occ)
         ctx += " " + vectors.context(shot.info.get("view"), shot.info.get("layers"))
-    _TURN.update(view=shot.info.get("view") if shot is not None else None, host=host)
+    _turn_start(shot, strokes, host)
+    region_view = _TURN.get("region_view")
+    # Navy's live lasso selection: read with this turn's registered offset
+    selected = selection.read_selection(qml_eval, host, view=region_view)
+    selection_pick = selection.precedence(selected, None)
+    from_selection = False
+    if selected is not None:
+        print(f"[selection] {selected.count} items box={selected.screen_box or selected.page_box} "
+              f"via {selected.source}", flush=True)
+        if focus_box is None and selected.screen_box:   # explicit /focus still wins
+            focus_box, from_selection = selected.screen_box, True
     if notebook_context(ses):
         ctx += " " + notebook_context(ses)
     # SPP: who inked what, where — so 'this graph', 'above', an arrow resolve
-    # to a region id (skill/smriti/references/protocol.md)
-    page = "" if shot is None else protocol.page_map(
-        shot.info.get("view"), shot.info.get("layers"), strokes,
-        _monke_regions(ses, shot), free_bands(shot), focus_box, free_rects=free)
-    page_regions = protocol.boxes(page)
+    # to a region id (skill/smriti/references/protocol.md). Semantic regions
+    # use page coordinates and persist only while this page stays open.
+    monke_regions = _monke_regions(ses, shot, region_view) if shot is not None else []
+    page_map = "" if shot is None else protocol.page_map(
+        region_view, shot.info.get("layers"), strokes,
+        monke_regions, free_bands(shot), focus_box, free_rects=free)
+    semantic, prompt_page, region_block = [], None, ""
+    if region_view:                                # the selection is a region, not the prompt
+        prompt_screen = (from_selection and harness.strokes_box(strokes)) or focus_box \
+            or harness.strokes_box(strokes)
+        prompt_page = regions.to_page_box(prompt_screen, region_view) if prompt_screen else None
+        monke_page = [dict(m, box=regions.to_page_box(m["box"], region_view))
+                      for m in monke_regions if m.get("box")]
+        _TURN["region_turn"] = _TURN.get("region_turn", 0) + 1
+        semantic = regions.build(regions.navy_strokes(shot.info.get("layers") if shot else None), monke_page,
+                                 prior=_TURN.get("regions"), turn=_TURN["region_turn"],
+                                 exclude_box=prompt_page)
+        _TURN["regions"] = semantic
+        region_block = regions.context_block(semantic, focus=prompt_page, budget_chars=699)
+    page = page_map + ("\n" + region_block if region_block else "")
+    page_regions = protocol.boxes(page_map)
+    if region_view:
+        page_regions.update({rid: regions.to_screen_box(box, region_view)
+                             for rid, box in regions.boxes(semantic).items()})
     marks = None
     if page and cfg_ai.get("som", True):
-        marks = ({k: v for k, v in page_regions.items() if not k.startswith("E")}, free)
+        marks = ({k: v for k, v in page_regions.items() if not k.startswith("E")
+                  and v[0] < CANVAS_W and v[1] < CANVAS_H and v[2] > 0 and v[3] > 0}, free)
     focus, overview = harness.layers(Image.open(io.BytesIO(png)),
                                      focus_box or harness.strokes_box(strokes), marks=marks)
+    selection_block = ""
+    if selected is not None:                       # focus = the selection crop, cleaned + scaled
+        selection_block = selection.grounding_block(
+            selected, selection.strokes_in(selected, shot_info.get("layers") or {}),
+            harness.png(focus) if from_selection else None)
+        page += "\n" + selection_block
     merged_used = not merged_fallback(route, action)
     merged_reply, merged_streamer = "", None
     first_ink = [None]
@@ -2861,6 +3110,23 @@ def _reply(strokes, style, step, bottom, host, history, floor,
         return floor
     print(f"read ({time.time() - t0:.1f}s): {reading['kind']} | "
           f"{harness.describe(reading)}", flush=True)
+    rid, conf, why = regions.resolve(reading.get("text", ""), semantic,
+                                     last_prompt_bbox=prompt_page)
+    if rid and conf >= .7 and reading.get("target", "F") in ("", "F"):
+        target = next(r for r in semantic if r.id == rid)
+        reading = dict(reading, target=rid, target_kind=target.kind,
+                       target_desc=target.desc)
+        print(f"[regions] target {rid} {target.kind} ({conf:.2f}: {why})", flush=True)
+    elif why.startswith("ambiguous"):
+        print(f"[regions] ambiguous ({conf:.2f}: {why})", flush=True)
+    if selection_pick["winner"] == "selection":
+        reading = dict(reading, target="selection", target_kind="", target_desc=selection_pick["reason"])
+    if reading.get("target", "").startswith("R"):
+        semantic = regions.hint(semantic, reading["target"], reading.get("target_kind"),
+                                reading.get("target_desc"))
+        _TURN["regions"] = semantic
+        region_block = regions.context_block(semantic, focus=reading["target"], budget_chars=699)
+        page = page_map + "\n" + region_block
     is_prompt, reading = harness.strip_prompt(reading)
     if (is_prompt and re.search(r"\b(refine|neaten|clean)\b", reading.get("text", ""), re.I)):
         reading = dict(reading, intent="refine")
@@ -2900,7 +3166,7 @@ def _reply(strokes, style, step, bottom, host, history, floor,
                 import place
                 from screen import stroke_mask
                 occ = place.occupancy(stroke_mask(shot))
-        ys = _refine(reading, page, shot, ses, host, step, floor, bottom, occ)
+        ys = _refine(reading, page, shot, ses, host, step, floor, bottom, occ, region_view)
         if ys is not None:
             ses.log_turn("Navy", harness.describe(reading))
             return max(floor, ys)
@@ -2964,7 +3230,9 @@ def _reply(strokes, style, step, bottom, host, history, floor,
     # SPP directive lines are for the daemon: off the reply BEFORE it inks
     # (the streamer skipped them unit by unit; `raw` keeps its offsets valid)
     directives, _ = protocol.parse_directives(shown)
-    text = _spp_directives(shown, page)
+    if region_view and (target := regions.target(shown, semantic)):
+        page_regions[target[0]] = regions.to_screen_box(target[1], region_view)
+    text = _spp_directives(shown, page, semantic)
     # A short merged reply may have no newline. Keep its streamer alive so
     # finish() flushes that final unit and records the actual first ink.
     if streamer and not diagram and (streamer.started or streamer.blocked or (merged_used and raw)):
@@ -3122,12 +3390,19 @@ def _shift(strokes: list, s: float, x0: int, y0: int) -> list:
             for st in strokes]
 
 
-def _at(strokes: list, dy: int) -> list:
-    """Strokes moved down by dy, each keeping its class (Drawn = thin pen)
-    and pen colour."""
-    return [type(s)([(x, py + dy) for x, py in s], getattr(s, "color", 0))
-            if isinstance(s, (Drawn, Tinted)) else [(x, py + dy) for x, py in s]
+def _at(strokes: list, dy: int, dx: int = 0) -> list:
+    """Strokes moved down by dy (right by dx), each keeping its class
+    (Drawn = thin pen) and pen colour."""
+    return [type(s)([(px + dx, py + dy) for px, py in s], getattr(s, "color", 0))
+            if isinstance(s, (Drawn, Tinted)) else [(px + dx, py + dy) for px, py in s]
             for s in strokes]
+
+
+def _box(strokes: list) -> tuple[int, int, int, int]:
+    """(x, y, w, h) screen box of strokes."""
+    xs = [px for s in strokes for px, _ in s]
+    ys = [py for s in strokes for _, py in s]
+    return min(xs), min(ys), max(xs) - min(xs), max(ys) - min(ys)
 
 
 def _block_layout(b, style, y: int, log=None) -> tuple:

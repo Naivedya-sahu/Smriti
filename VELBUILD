@@ -1,6 +1,6 @@
 maintainer="Smriti maintainers <maintainers@example.invalid>"
 pkgname=smriti
-pkgver=0.2.0
+pkgver=0.6.0
 pkgrel=0
 _commit=COMMIT_PLACEHOLDER
 upstream_author="Naivedya-sahu"
@@ -47,8 +47,7 @@ package() {
 	# xovi pieces — inert until xovi + appload + qt-resource-rebuilder exist
 	install -Dm644 "$builddir"/device/xovi/smriti-eye.qmd \
 		"$pkgdir"/home/root/xovi/exthome/qt-resource-rebuilder/smriti-eye.qmd
-	install -Dm644 "$builddir"/device/qmd/smriti-ask.qmd \
-		"$pkgdir"/home/root/xovi/exthome/qt-resource-rebuilder/smriti-ask.qmd
+	# device/qmd/smriti-ask.qmd is NOT shipped: tablet qmldiff rejected it (0.5.0 rollback)
 	for f in manifest.json icon.png resources.rcc; do
 		install -Dm644 "$builddir"/device/appload/smriti/$f \
 			"$pkgdir"/home/root/xovi/exthome/appload/smriti/$f
@@ -56,6 +55,8 @@ package() {
 
 	install -Dm644 "$builddir"/LICENSE \
 		"$pkgdir"/home/root/.vellum/licenses/$pkgname/LICENSE
+	install -Dm644 "$builddir"/device/licenses/lamp-NOTICE.txt \
+		"$pkgdir"/home/root/.vellum/licenses/$pkgname/lamp-NOTICE.txt
 	echo "$url/archive/$_commit.tar.gz" > \
 		"$pkgdir"/home/root/.vellum/licenses/$pkgname/SOURCES
 }

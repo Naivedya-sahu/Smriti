@@ -8,7 +8,7 @@ Smriti is a reMarkable 2 study companion. Write on an rM2 notebook; Smriti reads
 - Tablet app: Vellum/reManager package recipe, AppLoad master switch and xovi floating eye.
 - Wireless transport: Tailnet → USB → saved Wi-Fi/hotspot, plus bounded local rM2 discovery.
 - Providers: fresh per-user ChatGPT sign-in, OpenAI API, Anthropic API, optional Claude CLI and explicit local OpenAI-compatible endpoint.
-- Deterministic middleware: typed render plans, AST-safe plots, deterministic TeX/circuit/diagram rendering, model output validation.
+- Deterministic middleware: typed render plans, AST-safe plots, deterministic TeX/circuit/diagram rendering, semantic regions, selection grounding, scroll-aware reply rebasing and model output validation.
 - Eye states: closed idle, open watching, pulsing dots thinking, pen stroke drawing.
 
 ## Install paths

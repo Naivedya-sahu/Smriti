@@ -10,10 +10,12 @@
 
 ## Current capabilities
 
+Semantic regions, selection grounding and scroll-aware continuation are 0.6 development features; device validation is pending.
+
 | Area | Capability |
 |---|---|
-| Context | visible screenshot with fresh strokes marked red; notebook/page hierarchy; same-page session log; other-page summaries; free-band placement |
-| Safety | armed gate; page/view-change refusal before draw; stale-prompt refusal; safe plotting AST; drawing confirmation where required |
+| Context | visible screenshot with fresh strokes marked red; notebook/page hierarchy; same-page session log; other-page summaries; free-band placement; semantic regions; selection grounding; scroll-aware reply continuation |
+| Safety | armed gate; page-change refusal; measured-scroll rebasing without redraw at the old position; stale-prompt refusal; safe plotting AST; drawing confirmation where required |
 | Maths | TeX normalization/typesetting, equation render plans, plots, pole-zero and frequency-response primitives |
 | Diagrams | deterministic render plan for circuit/diagram roles; CircuitikZ/PGFPlots pipeline |
 | Input/output | pen capture, handwriting render, injected real notebook ink, shadow-only pen tagging |
@@ -32,4 +34,4 @@
 
 ## Evidence boundary
 
-Host tests cover current logic. The newest structured page protocol, Set-of-Mark labels and region-aware placement are host/simulation-tested but require final rM2 live validation. See [PAGE-CONTEXT.md](PAGE-CONTEXT.md) and [REQUIREMENTS-AND-TESTS.md](REQUIREMENTS-AND-TESTS.md).
+Host tests cover current logic. The newest structured page protocol, Set-of-Mark labels, semantic regions, selection grounding, scroll rebasing and region-aware placement are host/simulation-tested but require final rM2 live validation. See [PAGE-CONTEXT.md](PAGE-CONTEXT.md) and [REQUIREMENTS-AND-TESTS.md](REQUIREMENTS-AND-TESTS.md).

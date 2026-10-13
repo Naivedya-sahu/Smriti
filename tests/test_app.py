@@ -179,6 +179,31 @@ class TrayMenuBuildsTest(unittest.TestCase):
         self.assertTrue(built and built[0] > 5)
         started.assert_called_once()                    # tray launch = daemon starts
 
+    def test_watcher_ends_with_the_tray_so_it_cannot_restart_a_daemon(self):
+        """2026-10-13: the watcher thread outlived tray.main(); ~20 s later its
+        supervisor called the (no longer patched) Daemon.start and a full unit
+        run spawned a REAL `app.py run` against the tablet."""
+        import threading
+        import pystray
+        import tray
+        made = []
+        real = threading.Thread
+
+        def spy(*a, **k):
+            t = real(*a, **k)
+            made.append(t)
+            return t
+        with (patch.object(pystray.Icon, "run", lambda self, *a, **k: None),
+              patch.object(tray, "single_instance", return_value=True),
+              patch.object(tray.Daemon, "start", return_value=True),
+              patch.object(tray.threading, "Thread", side_effect=spy)):
+            self.assertEqual(tray.main(), 0)
+        new = [t for t in made if t.name == "smriti-tray-watch"]
+        for t in new:
+            t.join(timeout=2)
+        self.assertTrue(new, "watcher thread must be named smriti-tray-watch")
+        self.assertFalse(any(t.is_alive() for t in new), "watcher still alive after tray.main() returned")
+
 
 class SshFixOfferTest(unittest.TestCase):
     def test_rejected_key_offers_password_pairing_or_config(self):

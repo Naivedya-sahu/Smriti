@@ -1,5 +1,16 @@
 # Changelog
 
+## v0.6.0 (2026-10-13) — page context: regions, selection, scroll rebasing
+
+- **Release assets:** Windows installer `Smriti-Setup-0.6.0.exe` and the rM2 Vellum package are attached to the GitHub release (see the release page install guide).
+- **Live rM2 run (2026-10-13):** circuit-in-this-area regions, region follow-ups, scroll continuation and page-bottom waiting worked on device. Known issues found live, fixed in 0.6.1/0.7: Monke can re-read its own fresh reply as a new prompt (repeat/overlap); a confirm step waits for an eye tap without a visible cue; an out-of-room reply is logged, not inked, with no on-page cue; lasso-then-pen does not ground on the selection (selection is gone by the time the prompt is read); `pi` is drawn as letters in graph text; very small text is hard to read; writing during a reply is not isolated from the reply's injected strokes.
+- **Scroll-aware continuation/rebasing:** reply units stay in page-coordinate units; matched offsets detect view moves; page bottom waits for a still view for 2 s; a measured move never redraws old ink; partial units retry only missing strokes; `page_full` stops the reply. `[monke] page_height` sets the page end (0 = no end).
+- **Semantic regions:** stable per-page `R` ids classify Navy and Monke ink by kind; reader and writer receive a `<regions>` block capped at 700 characters; deictic references resolve to a region; directives accept `@target R3`.
+- **Selection grounding:** firmware 3.27.1.0 probes `sceneController.boundingRect` and `itemsBoundingRect`; reader and writer receive a `<selection>` block capped at 500 characters, with focus and cleaned crop. An active selection beats regions/deixis, is never deselected, and unsupported probes use a negative cache.
+- **One page↔screen contract:** `vectors.to_screen()` and page inverses apply registered-offset scale consistently.
+- **Validation:** 634 unit tests OK; 30/31 simulations clean (`pause_mid_prompt` remains pre-existing).
+- **Known limits:** before a scrolled prompt offset registers (about 10 s), view-field context fallback is safe against inking over Navy but may be wrong; the selection-rectangle coordinate frame under a real selection is not measured; region clustering is quadratic on very sparse pages (2000 isolated strokes: about 430 ms).
+
 ## v0.5.0 (2026-10-10) — host complete; RM2 validation pending
 
 - **Brain:** ChatGPT direct Route B is the default (`gpt-5.6-luna`); one `host/brain.py` entry point; no local inference, LM Studio, Qwen, Gemini, polling, or automatic local fallback. Claude remains an explicit selectable route only.

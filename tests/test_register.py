@@ -60,6 +60,27 @@ class RegisterTest(unittest.TestCase):
         self.assertEqual(vectors.to_screen([(10, 20)], {"ox": 936, "oy": -9000, "right": 0, "top": 0}),
                          [(946, -8980)])
 
+    def test_to_page_round_trip_within_one_pixel_at_fractional_scale(self):
+        # screen pixels are integers: to_screen truncates, so page -> screen -> page is exact only to
+        # 1/scale page units; the contract is "within 1 screen px", pinned here
+        for v in ({"ox": 0.1, "oy": 0.2, "scale": 1.5}, {"right": -468.3, "top": -10354.7, "scale": 1.25}):
+            pts = [(1, 1), (123.4, 567.8), (-300.5, 2000.25)]
+            back = vectors.to_page(vectors.to_screen(pts, v), v)
+            for (x, y), (bx, by) in zip(pts, back):
+                self.assertLessEqual(abs(x - bx) * v["scale"], 1.0)
+                self.assertLessEqual(abs(y - by) * v["scale"], 1.0)
+            self.assertEqual(vectors.to_screen(back, v), vectors.to_screen(pts, v))   # screen side is a fixed point
+
+    def test_to_page_inverts_registered_and_field_views_at_scale_one_and_two(self):
+        cases = (
+            ({"ox": 936, "oy": -9000, "scale": 1}, [(10, 20), (300, 500)]),
+            ({"ox": -702, "oy": -300, "scale": 2}, [(10, 20), (300, 500)]),
+            ({"right": -702, "top": 300, "scale": 1}, [(10, 20), (300, 500)]),
+            ({"right": -702, "top": -300, "scale": 2}, [(10, 20), (300, 500)]),
+        )
+        for view, stroke in cases:
+            self.assertEqual(vectors.to_page(vectors.to_screen(stroke, view), view), stroke)
+
 
 if __name__ == "__main__":
     unittest.main()

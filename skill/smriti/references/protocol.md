@@ -22,6 +22,8 @@ Sent to the reader (stage 1) and the writer (stage 2), after the task text.
 </page>
 ```
 
+A `<regions>` block follows: `<r id="R3" kind="circuit" owner="navy" box="x0,y0,x1,y1" .../>` in PAGE coords, ids stable across turns; any directive or `target` may use an R id.
+
 | Attribute | Meaning |
 |---|---|
 | `id` | `N<k>` Navy ink group, `M<k>` Monke reply, `G<k>` Monke graph (same id Navy may write as "G1"), `F` the newest writing (focus) |
@@ -38,7 +40,7 @@ Regions off-screen are omitted. Max 12 regions; smallest/oldest Navy groups merg
 ```json
 {"kind": "...", "text": "...", "latex": "...", "circuit": "...",
  "intent": "question|note|solve|plot|draw|write|refine",
- "target": "F|N2|G1|M1",
+ "target": "F|N2|G1|M1|R3",
  "target_kind": "text|math|circuit|graph|sketch|mixed",
  "target_desc": "what the target region contains, exactly enough to redraw it",
  "summary": "..."}
@@ -65,7 +67,7 @@ Optional directive lines at the START of the reply, one per line, never inked:
 - `@refine X as T` = the following block is a clean redraw of region X in type T. Navy's
   original ink is NEVER erased or moved (content safety: his layers are untouchable); the
   redraw goes beside it, else below it.
-- Directives reference ids from the `<page>` block only. Unknown id → ignored, logged.
+- Directives reference ids from the `<page>` or `<regions>` block. Unknown id → ignored, logged.
 - Plan mode (smriti_plan JSON): no directive lines; the plan's `place` field carries the
   `@place` argument (`"below N2"`), null for the default.
 

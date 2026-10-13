@@ -14,12 +14,10 @@
 
 | Priority | Work | Outcome |
 |---|---|---|
-| High | Region-level page context | Wire `workspace.observe()` to typed model context with provenance/bounds |
 | High | Textbook-first source mode | page-bound indexed prescribed sources, citations and refusal on weak evidence |
 | High | RM2 live validation | prove current SPP, placement and safety paths on device |
 | Medium | Ermine mascot | replace eye art in tray/installer/tablet UI without changing state semantics |
 | Medium | Local Mac mini pilot | serial specialist harness: controller + visual reader first; no automatic fallback |
-| Medium | Selection UI | revive lasso Ask only after a QMD design passes tablet qmldiff |
 | Later | Per-kind ink layers | graph/drawing/prose separation within rM2 layer-limit budget |
 
 ## Non-goals until explicitly reopened
